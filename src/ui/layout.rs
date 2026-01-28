@@ -151,14 +151,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
         ),
     ];
 
-    // Preview mode indicator
-    if app.preview_mode {
-        header_spans.push(Span::styled(
-            "[PREVIEW] ",
-            Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
-        ));
-    }
-
     header_spans.extend(vec![
         Span::styled("│ ", Style::default().fg(theme.fg_muted)),
         Span::styled(screen_info, Style::default().fg(theme.fg_secondary)),
@@ -381,36 +373,21 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
     }
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
-    let help = if app.preview_mode {
-        // Preview mode footer
-        Line::from(vec![
-            Span::styled("Enter", Style::default().fg(theme.accent_primary)),
-            Span::styled(" commit ", Style::default().fg(theme.fg_muted)),
-            Span::styled("Esc", Style::default().fg(theme.accent_primary)),
-            Span::styled(" cancel ", Style::default().fg(theme.fg_muted)),
-            Span::styled("←/→", Style::default().fg(theme.accent_primary)),
-            Span::styled(" browse", Style::default().fg(theme.fg_muted)),
-        ])
-    } else {
-        // Normal footer
-        Line::from(vec![
-            Span::styled("←/→", Style::default().fg(theme.accent_primary)),
-            Span::styled(" nav ", Style::default().fg(theme.fg_muted)),
-            Span::styled("Enter", Style::default().fg(theme.accent_primary)),
-            Span::styled(" apply ", Style::default().fg(theme.fg_muted)),
-            Span::styled("p", Style::default().fg(theme.accent_primary)),
-            Span::styled(" preview ", Style::default().fg(theme.fg_muted)),
-            Span::styled("c", Style::default().fg(theme.accent_primary)),
-            Span::styled(" colors ", Style::default().fg(theme.fg_muted)),
-            Span::styled("t", Style::default().fg(theme.accent_primary)),
-            Span::styled(" tag ", Style::default().fg(theme.fg_muted)),
-            Span::styled("?", Style::default().fg(theme.accent_primary)),
-            Span::styled(" help ", Style::default().fg(theme.fg_muted)),
-            Span::styled("q", Style::default().fg(theme.accent_primary)),
-            Span::styled(" quit", Style::default().fg(theme.fg_muted)),
-        ])
-    };
+fn draw_footer(f: &mut Frame, _app: &App, area: Rect, theme: &FrostTheme) {
+    let help = Line::from(vec![
+        Span::styled("←/→", Style::default().fg(theme.accent_primary)),
+        Span::styled(" nav ", Style::default().fg(theme.fg_muted)),
+        Span::styled("Enter", Style::default().fg(theme.accent_primary)),
+        Span::styled(" apply ", Style::default().fg(theme.fg_muted)),
+        Span::styled("r", Style::default().fg(theme.accent_primary)),
+        Span::styled(" random ", Style::default().fg(theme.fg_muted)),
+        Span::styled("c", Style::default().fg(theme.accent_primary)),
+        Span::styled(" colors ", Style::default().fg(theme.fg_muted)),
+        Span::styled("?", Style::default().fg(theme.accent_primary)),
+        Span::styled(" help ", Style::default().fg(theme.fg_muted)),
+        Span::styled("q", Style::default().fg(theme.accent_primary)),
+        Span::styled(" quit", Style::default().fg(theme.fg_muted)),
+    ]);
 
     let paragraph = Paragraph::new(help).alignment(Alignment::Center);
     f.render_widget(paragraph, area);
@@ -634,10 +611,6 @@ fn draw_help_popup(f: &mut Frame, area: Rect, theme: &FrostTheme) {
         Line::from(vec![
             Span::styled("  Enter   ", Style::default().fg(theme.accent_primary)),
             Span::styled("Apply wallpaper", Style::default().fg(theme.fg_secondary)),
-        ]),
-        Line::from(vec![
-            Span::styled("  p       ", Style::default().fg(theme.accent_primary)),
-            Span::styled("Preview (temporary)", Style::default().fg(theme.fg_secondary)),
         ]),
         Line::from(vec![
             Span::styled("  r       ", Style::default().fg(theme.accent_primary)),

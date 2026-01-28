@@ -22,14 +22,17 @@ All notable changes to FrostWall will be documented in this file.
   - Detects file count changes in directory
 - **Better Error Handling**: Errors displayed in UI instead of lost
   - `last_error` field shows issues in TUI
-  - All apply/preview/pywal errors properly reported
+  - Apply/pywal errors properly reported
 - **Fixed swww Output Parsing**: Exact match on output names
   - DP-1 no longer matches DP-10
 
+### Removed
+- **Preview Mode**: Removed due to swww not exposing current wallpaper path
+
 ### Fixed
 - Random wallpaper now properly returns errors
-- Preview wallpaper errors displayed to user
 - pywal export errors shown in UI
+- Tag filter shows message when no tags defined
 
 ## [0.3.0] - 2026-01-28
 

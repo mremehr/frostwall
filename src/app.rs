@@ -300,6 +300,10 @@ pub enum AppEvent {
     Tick,
 }
 
+/// Maximum number of thumbnails to keep in memory
+/// Kitty graphics protocol can get confused with too many images
+const MAX_THUMBNAIL_CACHE: usize = 12;
+
 pub struct App {
     pub screens: Vec<Screen>,
     pub cache: WallpaperCache,
@@ -310,6 +314,8 @@ pub struct App {
     pub should_quit: bool,
     pub image_picker: Option<Picker>,
     pub thumbnail_cache: HashMap<usize, Box<dyn StatefulProtocol>>,
+    /// Order of cache entries for LRU eviction
+    thumbnail_cache_order: Vec<usize>,
     /// Tracks which thumbnails are currently being loaded
     pub loading_thumbnails: std::collections::HashSet<usize>,
     /// Channel to request thumbnail loading
@@ -318,11 +324,6 @@ pub struct App {
     pub show_help: bool,
     /// Current sort mode
     pub sort_mode: SortMode,
-    /// Live preview mode - store original wallpaper to revert
-    pub preview_mode: bool,
-    pub original_wallpaper: Option<PathBuf>,
-    /// Track last applied wallpaper per screen (for preview revert)
-    pub applied_wallpapers: std::collections::HashMap<String, PathBuf>,
     /// Active tag filter (None = show all)
     pub active_tag_filter: Option<String>,
     /// Show color palette of selected wallpaper
@@ -368,12 +369,11 @@ impl App {
             should_quit: false,
             image_picker,
             thumbnail_cache: HashMap::new(),
+            thumbnail_cache_order: Vec::new(),
             loading_thumbnails: std::collections::HashSet::new(),
             thumb_request_tx: None,
             show_help: false,
             sort_mode: SortMode::Name,
-            preview_mode: false,
-            original_wallpaper: None,
             active_tag_filter: None,
             show_colors: false,
             show_color_picker: false,
@@ -382,7 +382,6 @@ impl App {
             active_color_filter: None,
             pywal_export: false,
             last_error: None,
-            applied_wallpapers: std::collections::HashMap::new(),
         })
     }
 
@@ -437,6 +436,7 @@ impl App {
 
         // Clear thumbnail cache when filter changes
         self.thumbnail_cache.clear();
+        self.thumbnail_cache_order.clear();
         self.loading_thumbnails.clear();
     }
 
@@ -497,11 +497,6 @@ impl App {
     }
 
     pub fn apply_wallpaper(&mut self) -> Result<()> {
-        self.apply_wallpaper_internal(true)
-    }
-
-    /// Internal apply - track controls whether we update applied_wallpapers
-    fn apply_wallpaper_internal(&mut self, track: bool) -> Result<()> {
         if let (Some(screen), Some(wp)) = (self.selected_screen(), self.selected_wallpaper()) {
             let screen_name = screen.name.clone();
             let wp_path = wp.path.clone();
@@ -514,11 +509,6 @@ impl App {
                 self.config.display.resize_mode,
                 &self.config.display.fill_color,
             )?;
-
-            // Track applied wallpaper (unless in preview mode)
-            if track && !self.preview_mode {
-                self.applied_wallpapers.insert(screen_name.clone(), wp_path.clone());
-            }
 
             // Export pywal colors if enabled
             if self.pywal_export {
@@ -574,13 +564,31 @@ impl App {
         self.loading_thumbnails.remove(&response.cache_idx);
 
         if let Some(picker) = &mut self.image_picker {
+            // Evict oldest entries if cache is full
+            while self.thumbnail_cache.len() >= MAX_THUMBNAIL_CACHE {
+                if let Some(oldest_idx) = self.thumbnail_cache_order.first().copied() {
+                    self.thumbnail_cache.remove(&oldest_idx);
+                    self.thumbnail_cache_order.remove(0);
+                } else {
+                    break;
+                }
+            }
+
             let protocol = picker.new_resize_protocol(response.image);
             self.thumbnail_cache.insert(response.cache_idx, protocol);
+            self.thumbnail_cache_order.push(response.cache_idx);
         }
     }
 
-    /// Check if a thumbnail is ready
+    /// Check if a thumbnail is ready (also updates LRU order)
     pub fn get_thumbnail(&mut self, cache_idx: usize) -> Option<&mut Box<dyn StatefulProtocol>> {
+        if self.thumbnail_cache.contains_key(&cache_idx) {
+            // Move to end of LRU order (most recently used)
+            if let Some(pos) = self.thumbnail_cache_order.iter().position(|&i| i == cache_idx) {
+                self.thumbnail_cache_order.remove(pos);
+                self.thumbnail_cache_order.push(cache_idx);
+            }
+        }
         self.thumbnail_cache.get_mut(&cache_idx)
     }
 
@@ -629,48 +637,6 @@ impl App {
 
         // Reset selection after sort
         self.selected_wallpaper_idx = 0;
-    }
-
-    /// Enter preview mode - temporarily apply wallpaper
-    pub fn preview_wallpaper(&mut self) -> Result<()> {
-        // Store original wallpaper on first preview
-        if !self.preview_mode {
-            if let Some(screen) = self.selected_screen() {
-                // Get from our tracked wallpapers instead of swww query
-                self.original_wallpaper = self.applied_wallpapers
-                    .get(&screen.name)
-                    .cloned();
-            }
-            self.preview_mode = true;
-        }
-
-        // Apply current selection as preview (don't track it)
-        self.apply_wallpaper_internal(false)?;
-        Ok(())
-    }
-
-    /// Revert to original wallpaper (cancel preview)
-    pub fn cancel_preview(&mut self) -> Result<()> {
-        if self.preview_mode {
-            if let (Some(screen), Some(original)) = (self.selected_screen(), &self.original_wallpaper) {
-                swww::set_wallpaper_with_resize(
-                    &screen.name,
-                    original,
-                    &self.config.transition(),
-                    self.config.display.resize_mode,
-                    &self.config.display.fill_color,
-                )?;
-            }
-            self.preview_mode = false;
-            self.original_wallpaper = None;
-        }
-        Ok(())
-    }
-
-    /// Commit preview (keep current wallpaper)
-    pub fn commit_preview(&mut self) {
-        self.preview_mode = false;
-        self.original_wallpaper = None;
     }
 
     /// Toggle color display for selected wallpaper
@@ -948,16 +914,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     let code = key.code;
 
                     // Quit (configurable + Esc always works)
-                    if kb.matches(code, &kb.quit.clone()) {
-                        let _ = app.cancel_preview();
+                    if kb.matches(code, &kb.quit.clone()) || code == KeyCode::Esc {
                         app.should_quit = true;
-                    } else if code == KeyCode::Esc {
-                        // Esc cancels preview first, then quits
-                        if app.preview_mode {
-                            let _ = app.cancel_preview();
-                        } else {
-                            app.should_quit = true;
-                        }
                     }
                     // Navigation (configurable + arrow keys always work)
                     else if kb.matches(code, &kb.next.clone()) || code == KeyCode::Right {
@@ -973,9 +931,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     // Apply wallpaper (configurable)
                     else if kb.matches(code, &kb.apply.clone()) {
-                        if app.preview_mode {
-                            app.commit_preview();
-                        } else if let Err(e) = app.apply_wallpaper() {
+                        if let Err(e) = app.apply_wallpaper() {
                             app.last_error = Some(format!("{}", e));
                         }
                     }
@@ -993,16 +949,11 @@ fn run_app<B: ratatui::backend::Backend>(
                     else if kb.matches(code, &kb.toggle_resize.clone()) {
                         app.toggle_resize_mode();
                     }
-                    // Non-configurable keys (these are less commonly changed)
+                    // Non-configurable keys
                     else {
                         match code {
                             KeyCode::Char('?') => app.toggle_help(),
                             KeyCode::Char('s') => app.toggle_sort_mode(),
-                            KeyCode::Char('p') => {
-                                if let Err(e) = app.preview_wallpaper() {
-                                    app.last_error = Some(format!("Preview: {}", e));
-                                }
-                            }
                             KeyCode::Char('c') => app.toggle_colors(),
                             KeyCode::Char('C') => app.toggle_color_picker(),
                             KeyCode::Char('t') => app.cycle_tag_filter(),

@@ -157,7 +157,6 @@ mode = "auto"              # auto, light, dark
 | `h` / `←` | Previous wallpaper |
 | `l` / `→` | Next wallpaper |
 | `Enter` | Apply selected wallpaper |
-| `p` | Preview (temporary, revert with Esc) |
 | `r` | Random wallpaper (apply immediately) |
 | `m` | Toggle match mode (Strict/Flexible/All) |
 | `f` | Toggle resize mode (Crop/Fit/Center/Stretch) |
@@ -171,7 +170,7 @@ mode = "auto"              # auto, light, dark
 | `Tab` | Next screen |
 | `Shift+Tab` | Previous screen |
 | `?` | Show help popup |
-| `q` / `Esc` | Quit (Esc cancels preview first) |
+| `q` / `Esc` | Quit |
 
 ## Architecture
 
@@ -243,7 +242,7 @@ frostwall random
 
 ## Roadmap
 
-### ✓ Implemented (v0.3.0)
+### ✓ Implemented (v0.4.0)
 
 - **Interactive Setup** (`frostwall init`) - Guided wizard for new users
 - **Profile System** - Multiple configs for work/gaming/etc contexts
@@ -252,11 +251,12 @@ frostwall random
 - **Tagging System** - CLI and TUI tag management, filtering by tag
 - **Color Palette Display** - View dominant colors in TUI (`c` key)
 - **Sorting Modes** - Sort by name, size, or date
-- **Live Preview** - Preview wallpaper without committing (`p` key)
 - **Help Popup** - Full keybinding reference (`?` key)
 - **pywal Integration** - Export colors to ~/.cache/wal/ (`w` key or `frostwall pywal`)
 - **Color Filtering** - Filter wallpapers by color (`C` to open picker)
 - **Parallel Scanning** - Multi-core wallpaper scanning with rayon
+- **Recursive Scanning** - Scan subdirectories with `recursive = true`
+- **Configurable Keybindings** - Customize keyboard shortcuts in config
 
 ### Planned Features
 
