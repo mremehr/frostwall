@@ -1,3 +1,4 @@
+use crate::pairing::PairingHistory;
 use crate::screen::{self, Screen};
 use crate::swww::{self, FillColor, ResizeMode, Transition, TransitionType};
 use crate::thumbnail::ThumbnailCache;
@@ -34,6 +35,10 @@ pub struct Config {
     pub theme: ThemeConfig,
     #[serde(default)]
     pub keybindings: KeybindingsConfig,
+    #[serde(default)]
+    pub clip: ClipConfig,
+    #[serde(default)]
+    pub pairing: PairingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +90,34 @@ pub struct KeybindingsConfig {
     pub toggle_resize: String,
     pub next_screen: String,
     pub prev_screen: String,
+}
+
+/// Configuration for CLIP auto-tagging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipConfig {
+    /// Enable CLIP auto-tagging during scans
+    pub enabled: bool,
+    /// Confidence threshold for tags (0.0-1.0)
+    pub threshold: f32,
+    /// Include auto-tags in tag filter UI
+    pub show_in_filter: bool,
+    /// Cache embeddings for similarity search
+    pub cache_embeddings: bool,
+}
+
+/// Configuration for intelligent wallpaper pairing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingConfig {
+    /// Enable intelligent pairing suggestions
+    pub enabled: bool,
+    /// Auto-apply suggestions to other screens
+    pub auto_apply: bool,
+    /// Show undo option duration (seconds)
+    pub undo_window_secs: u64,
+    /// Minimum confidence to auto-apply (0.0-1.0)
+    pub auto_apply_threshold: f32,
+    /// Maximum history records to keep
+    pub max_history_records: usize,
 }
 
 impl Default for WallpaperConfig {
@@ -154,6 +187,29 @@ impl Default for KeybindingsConfig {
             toggle_resize: "f".to_string(),
             next_screen: "Tab".to_string(),
             prev_screen: "BackTab".to_string(),
+        }
+    }
+}
+
+impl Default for ClipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Opt-in by default
+            threshold: 0.25,
+            show_in_filter: true,
+            cache_embeddings: true,
+        }
+    }
+}
+
+impl Default for PairingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_apply: false, // Conservative default
+            undo_window_secs: 5,
+            auto_apply_threshold: 0.7,
+            max_history_records: 1000,
         }
     }
 }
@@ -340,6 +396,10 @@ pub struct App {
     pub pywal_export: bool,
     /// Last error message (for UI display)
     pub last_error: Option<String>,
+    /// Pairing history for intelligent suggestions
+    pub pairing_history: PairingHistory,
+    /// Suggested wallpapers based on pairing history (for TUI highlighting)
+    pub pairing_suggestions: Vec<PathBuf>,
 }
 
 impl App {
@@ -358,6 +418,10 @@ impl App {
                 p
             })
             .or_else(|| Some(Picker::new((8, 16))));
+
+        // Load pairing history
+        let pairing_history = PairingHistory::load(config.pairing.max_history_records)
+            .unwrap_or_else(|_| PairingHistory::new(config.pairing.max_history_records));
 
         Ok(Self {
             screens: Vec::new(),
@@ -382,6 +446,8 @@ impl App {
             active_color_filter: None,
             pywal_export: false,
             last_error: None,
+            pairing_history,
+            pairing_suggestions: Vec::new(),
         })
     }
 
@@ -465,6 +531,7 @@ impl App {
         if !self.filtered_wallpapers.is_empty() {
             self.selected_wallpaper_idx =
                 (self.selected_wallpaper_idx + 1) % self.filtered_wallpapers.len();
+            self.update_pairing_suggestions();
         }
     }
 
@@ -475,6 +542,7 @@ impl App {
             } else {
                 self.selected_wallpaper_idx - 1
             };
+            self.update_pairing_suggestions();
         }
     }
 
@@ -482,6 +550,7 @@ impl App {
         if !self.screens.is_empty() {
             self.selected_screen_idx = (self.selected_screen_idx + 1) % self.screens.len();
             self.update_filtered_wallpapers();
+            self.update_pairing_suggestions();
         }
     }
 
@@ -493,6 +562,7 @@ impl App {
                 self.selected_screen_idx - 1
             };
             self.update_filtered_wallpapers();
+            self.update_pairing_suggestions();
         }
     }
 
@@ -502,6 +572,11 @@ impl App {
             let wp_path = wp.path.clone();
             let wp_colors = wp.colors.clone();
 
+            // Save current state for undo (before any changes)
+            let mut previous_state = std::collections::HashMap::new();
+            // Note: We'd need to track current wallpapers per screen, which swww doesn't expose
+            // For now, we just record the pairing without full undo support
+
             swww::set_wallpaper_with_resize(
                 &screen_name,
                 &wp_path,
@@ -509,6 +584,56 @@ impl App {
                 self.config.display.resize_mode,
                 &self.config.display.fill_color,
             )?;
+
+            // Intelligent pairing: auto-apply to other screens
+            if self.config.pairing.enabled && self.config.pairing.auto_apply && self.screens.len() > 1 {
+                let mut paired_count = 0;
+                let match_mode = self.config.display.match_mode;
+
+                for other_screen in &self.screens {
+                    if other_screen.name == screen_name {
+                        continue;
+                    }
+
+                    // Get wallpapers that match this screen
+                    let matching: Vec<_> = self.cache.wallpapers.iter()
+                        .filter(|w| w.matches_screen_with_mode(other_screen, match_mode))
+                        .collect();
+
+                    // Find best match based on pairing history
+                    if let Some(best_match) = self.pairing_history.get_best_match(
+                        &wp_path,
+                        &other_screen.name,
+                        &matching,
+                    ) {
+                        if let Err(e) = swww::set_wallpaper_with_resize(
+                            &other_screen.name,
+                            &best_match,
+                            &self.config.transition(),
+                            self.config.display.resize_mode,
+                            &self.config.display.fill_color,
+                        ) {
+                            self.last_error = Some(format!("Pairing {}: {}", other_screen.name, e));
+                        } else {
+                            paired_count += 1;
+                        }
+                    }
+                }
+
+                // Show undo popup if we auto-applied
+                if paired_count > 0 {
+                    self.pairing_history.begin_undo(
+                        previous_state,
+                        format!("Auto-paired {} screen(s)", paired_count),
+                        self.config.pairing.undo_window_secs,
+                    );
+                }
+            }
+
+            // Record this pairing in history
+            let mut current_wallpapers = std::collections::HashMap::new();
+            current_wallpapers.insert(screen_name.clone(), wp_path.clone());
+            self.pairing_history.record_pairing(current_wallpapers, true);
 
             // Export pywal colors if enabled
             if self.pywal_export {
@@ -518,6 +643,27 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Handle undo action (restore previous wallpapers)
+    pub fn do_undo(&mut self) -> Result<()> {
+        if let Some(previous) = self.pairing_history.do_undo() {
+            for (screen_name, wp_path) in previous {
+                swww::set_wallpaper_with_resize(
+                    &screen_name,
+                    &wp_path,
+                    &self.config.transition(),
+                    self.config.display.resize_mode,
+                    &self.config.display.fill_color,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Check and clear expired undo window
+    pub fn tick_undo(&mut self) {
+        self.pairing_history.clear_expired_undo();
     }
 
     pub fn random_wallpaper(&mut self) -> Result<()> {
@@ -754,6 +900,52 @@ impl App {
     pub fn toggle_pywal_export(&mut self) {
         self.pywal_export = !self.pywal_export;
     }
+
+    /// Update pairing suggestions based on currently selected wallpaper
+    pub fn update_pairing_suggestions(&mut self) {
+        self.pairing_suggestions.clear();
+
+        if !self.config.pairing.enabled {
+            return;
+        }
+
+        // Get selected wallpaper path
+        let selected_path = match self.selected_wallpaper() {
+            Some(wp) => wp.path.clone(),
+            None => return,
+        };
+
+        // Get suggestions from pairing history
+        let match_mode = self.config.display.match_mode;
+
+        // For each other screen, find suggested wallpapers
+        for (screen_idx, screen) in self.screens.iter().enumerate() {
+            if screen_idx == self.selected_screen_idx {
+                continue;
+            }
+
+            // Get wallpapers that match this screen
+            let matching: Vec<_> = self.cache.wallpapers.iter()
+                .filter(|wp| wp.matches_screen_with_mode(screen, match_mode))
+                .collect();
+
+            // Find best match based on pairing history
+            if let Some(suggested_path) = self.pairing_history.get_best_match(
+                &selected_path,
+                &screen.name,
+                &matching,
+            ) {
+                if !self.pairing_suggestions.contains(&suggested_path) {
+                    self.pairing_suggestions.push(suggested_path);
+                }
+            }
+        }
+    }
+
+    /// Check if a wallpaper is in the pairing suggestions
+    pub fn is_pairing_suggestion(&self, path: &std::path::Path) -> bool {
+        self.pairing_suggestions.iter().any(|p| p == path)
+    }
 }
 
 pub async fn run_tui(wallpaper_dir: PathBuf) -> Result<()> {
@@ -964,6 +1156,12 @@ fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                             KeyCode::Char('W') => app.toggle_pywal_export(),
+                            KeyCode::Char('u') => {
+                                // Undo pairing
+                                if let Err(e) = app.do_undo() {
+                                    app.last_error = Some(format!("Undo: {}", e));
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -972,7 +1170,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     app.handle_thumbnail_ready(response);
                 }
                 AppEvent::Tick => {
-                    // Just redraw on tick
+                    // Check for expired undo window
+                    app.tick_undo();
                 }
             }
         }

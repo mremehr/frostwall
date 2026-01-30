@@ -1,3 +1,4 @@
+use crate::clip::AutoTag;
 use crate::screen::{AspectCategory, Screen};
 use anyhow::{Context, Result};
 use image::{imageops::FilterType, GenericImageView};
@@ -81,6 +82,12 @@ pub struct Wallpaper {
     /// User-defined tags for this wallpaper
     #[serde(default)]
     pub tags: Vec<String>,
+    /// CLIP-generated auto tags with confidence scores
+    #[serde(default)]
+    pub auto_tags: Vec<AutoTag>,
+    /// Cached CLIP embedding for similarity search (512 dimensions)
+    #[serde(default)]
+    pub embedding: Option<Vec<f32>>,
     /// File size in bytes (for sorting)
     #[serde(default)]
     pub file_size: u64,
@@ -174,6 +181,8 @@ impl Wallpaper {
             aspect_category,
             colors,
             tags: Vec::new(),
+            auto_tags: Vec::new(),
+            embedding: None,
             file_size,
             modified_at,
         })
@@ -253,10 +262,11 @@ impl Wallpaper {
         self.tags.retain(|t| t != &tag);
     }
 
-    /// Check if wallpaper has a specific tag
+    /// Check if wallpaper has a specific tag (manual or auto)
     pub fn has_tag(&self, tag: &str) -> bool {
         let tag = tag.to_lowercase();
         self.tags.iter().any(|t| t == &tag)
+            || self.auto_tags.iter().any(|t| t.name.to_lowercase() == tag)
     }
 
     /// Check if wallpaper has any of the given tags
@@ -269,6 +279,30 @@ impl Wallpaper {
     #[allow(dead_code)]
     pub fn has_all_tags(&self, tags: &[String]) -> bool {
         tags.iter().all(|t| self.has_tag(t))
+    }
+
+    /// Get all tags (manual + auto tag names)
+    pub fn all_tags(&self) -> Vec<String> {
+        let mut all: Vec<String> = self.tags.clone();
+        all.extend(self.auto_tags.iter().map(|t| t.name.clone()));
+        all.sort();
+        all.dedup();
+        all
+    }
+
+    /// Get auto tags above a confidence threshold
+    pub fn auto_tags_above(&self, threshold: f32) -> Vec<&AutoTag> {
+        self.auto_tags.iter().filter(|t| t.confidence >= threshold).collect()
+    }
+
+    /// Set auto tags (replaces existing)
+    pub fn set_auto_tags(&mut self, tags: Vec<AutoTag>) {
+        self.auto_tags = tags;
+    }
+
+    /// Set embedding (replaces existing)
+    pub fn set_embedding(&mut self, embedding: Vec<f32>) {
+        self.embedding = Some(embedding);
     }
 
     /// Get primary/dominant color (first in list)
@@ -531,7 +565,7 @@ impl WallpaperCache {
         let mut tags: Vec<String> = self
             .wallpapers
             .iter()
-            .flat_map(|wp| wp.tags.iter().cloned())
+            .flat_map(|wp| wp.all_tags())
             .collect();
         tags.sort();
         tags.dedup();

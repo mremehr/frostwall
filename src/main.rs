@@ -1,5 +1,7 @@
 mod app;
+mod clip;
 mod init;
+mod pairing;
 mod profile;
 mod pywal;
 mod screen;
@@ -78,6 +80,26 @@ enum Commands {
         #[arg(short, long)]
         apply: bool,
     },
+    /// Manage intelligent wallpaper pairing
+    Pair {
+        #[command(subcommand)]
+        action: PairAction,
+    },
+    /// Auto-tag wallpapers using CLIP AI model (requires --features clip)
+    #[cfg(feature = "clip")]
+    AutoTag {
+        /// Only tag wallpapers missing auto-tags
+        #[arg(short, long)]
+        incremental: bool,
+
+        /// Confidence threshold (0.0-1.0)
+        #[arg(short, long, default_value = "0.25")]
+        threshold: f32,
+
+        /// Show detailed progress
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -102,6 +124,19 @@ enum TagAction {
     Show {
         /// Tag to filter by
         tag: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PairAction {
+    /// Show pairing statistics
+    Stats,
+    /// Clear all pairing history
+    Clear,
+    /// Show suggestions for a specific wallpaper
+    Suggest {
+        /// Path to wallpaper
+        path: PathBuf,
     },
 }
 
@@ -188,6 +223,13 @@ async fn main() -> Result<()> {
         Some(Commands::Pywal { path, apply }) => {
             pywal::cmd_pywal(&path, apply)?;
         }
+        Some(Commands::Pair { action }) => {
+            cmd_pair(action, &wallpaper_dir)?;
+        }
+        #[cfg(feature = "clip")]
+        Some(Commands::AutoTag { incremental, threshold, verbose }) => {
+            cmd_auto_tag(&wallpaper_dir, incremental, threshold, verbose).await?;
+        }
         None => {
             // TUI mode
             app::run_tui(wallpaper_dir).await?;
@@ -269,6 +311,57 @@ async fn cmd_scan(wallpaper_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn cmd_pair(action: PairAction, wallpaper_dir: &Path) -> Result<()> {
+    let config = app::Config::load()?;
+
+    match action {
+        PairAction::Stats => {
+            let history = pairing::PairingHistory::load(config.pairing.max_history_records)?;
+            println!("Pairing Statistics");
+            println!("==================");
+            println!("  Records: {}", history.record_count());
+            println!("  Affinity pairs: {}", history.affinity_count());
+            println!();
+            println!("Pairing is {}", if config.pairing.enabled { "enabled" } else { "disabled" });
+            println!("Auto-apply is {}", if config.pairing.auto_apply { "enabled" } else { "disabled" });
+        }
+        PairAction::Clear => {
+            let history = pairing::PairingHistory::new(config.pairing.max_history_records);
+            history.save()?;
+            println!("✓ Pairing history cleared");
+        }
+        PairAction::Suggest { path } => {
+            let history = pairing::PairingHistory::load(config.pairing.max_history_records)?;
+            let cache = wallpaper::WallpaperCache::load_or_scan(wallpaper_dir)?;
+
+            // Find wallpapers with affinity to the given path
+            let mut suggestions: Vec<_> = cache.wallpapers.iter()
+                .filter(|wp| wp.path != path)
+                .map(|wp| {
+                    let affinity = history.get_affinity(&path, &wp.path);
+                    (wp, affinity)
+                })
+                .filter(|(_, affinity)| *affinity > 0.0)
+                .collect();
+
+            suggestions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            if suggestions.is_empty() {
+                println!("No pairing suggestions for: {}", path.display());
+                println!("Use wallpapers together to build pairing history.");
+            } else {
+                println!("Pairing suggestions for: {}", path.display());
+                println!();
+                for (wp, affinity) in suggestions.iter().take(10) {
+                    println!("  {:.2} - {}", affinity, wp.path.display());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn cmd_tag(action: TagAction, wallpaper_dir: &Path) -> Result<()> {
     let mut cache = wallpaper::WallpaperCache::load_or_scan(wallpaper_dir)?;
 
@@ -315,5 +408,88 @@ fn cmd_tag(action: TagAction, wallpaper_dir: &Path) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[cfg(feature = "clip")]
+async fn cmd_auto_tag(
+    wallpaper_dir: &Path,
+    incremental: bool,
+    threshold: f32,
+    verbose: bool,
+) -> Result<()> {
+    use clip::ClipTagger;
+
+    println!("Initializing CLIP model...");
+
+    let tagger = ClipTagger::new().await?;
+
+    let mut cache = wallpaper::WallpaperCache::load_or_scan(wallpaper_dir)?;
+
+    let to_process: Vec<usize> = cache
+        .wallpapers
+        .iter()
+        .enumerate()
+        .filter(|(_, wp)| !incremental || wp.auto_tags.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+
+    if to_process.is_empty() {
+        println!("All wallpapers already tagged.");
+        return Ok(());
+    }
+
+    println!("Auto-tagging {} wallpapers...", to_process.len());
+
+    for (progress, idx) in to_process.iter().enumerate() {
+        let wp = &cache.wallpapers[*idx];
+        let path = wp.path.clone();
+
+        match tagger.tag_image(&path, threshold) {
+            Ok(tags) => {
+                if verbose {
+                    let tag_names: Vec<_> = tags.iter().map(|t| &t.name).collect();
+                    println!(
+                        "[{}/{}] {}: {:?}",
+                        progress + 1,
+                        to_process.len(),
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                        tag_names
+                    );
+                } else if (progress + 1) % 10 == 0 || progress + 1 == to_process.len() {
+                    eprint!("\rProgress: {}/{}", progress + 1, to_process.len());
+                }
+
+                cache.wallpapers[*idx].set_auto_tags(tags);
+            }
+            Err(e) => {
+                eprintln!(
+                    "\nWarning: Failed to tag {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    if !verbose {
+        eprintln!(); // Newline after progress
+    }
+
+    cache.save()?;
+
+    // Show summary
+    let tags = clip::ClipTagger::available_tags();
+    println!("\nTag distribution:");
+    for tag in tags {
+        let count = cache.wallpapers.iter()
+            .filter(|wp| wp.auto_tags.iter().any(|t| t.name == tag))
+            .count();
+        if count > 0 {
+            println!("  {}: {}", tag, count);
+        }
+    }
+
+    println!("\nDone! Tags saved to cache.");
     Ok(())
 }

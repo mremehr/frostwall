@@ -99,6 +99,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.show_help {
         draw_help_popup(f, area, &theme);
     }
+
+    // Draw undo popup (always on top if active)
+    if app.pairing_history.can_undo() {
+        draw_undo_popup(f, app, area, &theme);
+    }
 }
 
 fn draw_error(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
@@ -293,13 +298,18 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
         let cache_idx = app.filtered_wallpapers[idx];
         let is_selected = idx == app.selected_wallpaper_idx;
 
-        // Get filename before mutable borrow
-        let filename = app.cache.wallpapers
+        // Get wallpaper info before mutable borrow
+        let (filename, is_suggestion) = app.cache.wallpapers
             .get(cache_idx)
-            .and_then(|wp| wp.path.file_stem())
-            .and_then(|n| n.to_str())
-            .unwrap_or("?")
-            .to_string();
+            .map(|wp| {
+                let name = wp.path.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let suggested = app.is_pairing_suggestion(&wp.path);
+                (name, suggested)
+            })
+            .unwrap_or(("?".to_string(), false));
 
         let is_loading = app.is_loading(cache_idx);
 
@@ -315,16 +325,24 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
 
         let thumb_area = Rect::new(thumb_x, thumb_y, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT + 2);
 
-        // Draw thumbnail frame
+        // Draw thumbnail frame - green for suggestions, highlight for selected
         let border_color = if is_selected {
             theme.accent_highlight
+        } else if is_suggestion {
+            theme.success  // Green for pairing suggestions
         } else {
             theme.border
         };
 
+        let border_style = if is_suggestion && !is_selected {
+            Style::default().fg(border_color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(border_color)
+        };
+
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(border_style)
             .style(Style::default().bg(theme.bg_medium));
 
         let inner = block.inner(thumb_area);
@@ -362,13 +380,23 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
             f.render_widget(label, label_area);
         }
 
-        // Selection indicator below thumbnail (with bounds check)
-        if is_selected && thumb_area.bottom() < area.y + area.height {
+        // Indicators below thumbnail (with bounds check)
+        if thumb_area.bottom() < area.y + area.height {
             let indicator_area = Rect::new(thumb_x, thumb_area.bottom(), THUMBNAIL_WIDTH, 1);
-            let indicator = Paragraph::new("▲")
-                .style(Style::default().fg(theme.accent_highlight))
-                .alignment(Alignment::Center);
-            f.render_widget(indicator, indicator_area);
+
+            if is_selected {
+                // Selection indicator
+                let indicator = Paragraph::new("▲")
+                    .style(Style::default().fg(theme.accent_highlight))
+                    .alignment(Alignment::Center);
+                f.render_widget(indicator, indicator_area);
+            } else if is_suggestion {
+                // Pairing suggestion indicator
+                let indicator = Paragraph::new("★ paired")
+                    .style(Style::default().fg(theme.success))
+                    .alignment(Alignment::Center);
+                f.render_widget(indicator, indicator_area);
+            }
         }
     }
 }
@@ -663,5 +691,45 @@ fn draw_help_popup(f: &mut Frame, area: Rect, theme: &FrostTheme) {
     ];
 
     let paragraph = Paragraph::new(help_text);
+    f.render_widget(paragraph, inner);
+}
+
+/// Draw undo popup at bottom of screen
+fn draw_undo_popup(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
+    let remaining_secs = app.pairing_history.undo_remaining_secs().unwrap_or(0);
+    let message = app.pairing_history.undo_message().unwrap_or("Undo available");
+
+    // Position at bottom center
+    let popup_width = 45.min(area.width.saturating_sub(4));
+    let popup_height = 3;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = area.height.saturating_sub(popup_height + 2);
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear background
+    let clear = Block::default().style(Style::default().bg(theme.bg_dark));
+    f.render_widget(clear, popup_area);
+
+    // Popup border
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.warning))
+        .style(Style::default().bg(theme.bg_dark));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    // Content
+    let text = Line::from(vec![
+        Span::styled(message, Style::default().fg(theme.fg_primary)),
+        Span::styled(" | ", Style::default().fg(theme.fg_muted)),
+        Span::styled(
+            format!("Undo (u) {}s", remaining_secs),
+            Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
     f.render_widget(paragraph, inner);
 }
