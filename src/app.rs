@@ -400,6 +400,10 @@ pub struct App {
     pub pairing_history: PairingHistory,
     /// Suggested wallpapers based on pairing history (for TUI highlighting)
     pub pairing_suggestions: Vec<PathBuf>,
+    /// Current wallpaper per screen (for tracking pairings)
+    pub current_wallpapers: HashMap<String, PathBuf>,
+    /// Remember selected wallpaper index per screen
+    screen_positions: HashMap<usize, usize>,
 }
 
 impl App {
@@ -448,6 +452,8 @@ impl App {
             last_error: None,
             pairing_history,
             pairing_suggestions: Vec::new(),
+            current_wallpapers: HashMap::new(),
+            screen_positions: HashMap::new(),
         })
     }
 
@@ -548,20 +554,42 @@ impl App {
 
     pub fn next_screen(&mut self) {
         if !self.screens.is_empty() {
+            // Save current position
+            self.screen_positions.insert(self.selected_screen_idx, self.selected_wallpaper_idx);
+
             self.selected_screen_idx = (self.selected_screen_idx + 1) % self.screens.len();
             self.update_filtered_wallpapers();
+
+            // Restore position for new screen (if saved)
+            if let Some(&pos) = self.screen_positions.get(&self.selected_screen_idx) {
+                if pos < self.filtered_wallpapers.len() {
+                    self.selected_wallpaper_idx = pos;
+                }
+            }
+
             self.update_pairing_suggestions();
         }
     }
 
     pub fn prev_screen(&mut self) {
         if !self.screens.is_empty() {
+            // Save current position
+            self.screen_positions.insert(self.selected_screen_idx, self.selected_wallpaper_idx);
+
             self.selected_screen_idx = if self.selected_screen_idx == 0 {
                 self.screens.len() - 1
             } else {
                 self.selected_screen_idx - 1
             };
             self.update_filtered_wallpapers();
+
+            // Restore position for new screen (if saved)
+            if let Some(&pos) = self.screen_positions.get(&self.selected_screen_idx) {
+                if pos < self.filtered_wallpapers.len() {
+                    self.selected_wallpaper_idx = pos;
+                }
+            }
+
             self.update_pairing_suggestions();
         }
     }
@@ -572,10 +600,11 @@ impl App {
             let wp_path = wp.path.clone();
             let wp_colors = wp.colors.clone();
 
-            // Save current state for undo (before any changes)
-            let mut previous_state = std::collections::HashMap::new();
-            // Note: We'd need to track current wallpapers per screen, which swww doesn't expose
-            // For now, we just record the pairing without full undo support
+            // Save previous state for undo
+            let previous_state = self.current_wallpapers.clone();
+
+            // Update current wallpaper for this screen
+            self.current_wallpapers.insert(screen_name.clone(), wp_path.clone());
 
             swww::set_wallpaper_with_resize(
                 &screen_name,
@@ -586,8 +615,8 @@ impl App {
             )?;
 
             // Intelligent pairing: auto-apply to other screens
+            let mut paired_count = 0;
             if self.config.pairing.enabled && self.config.pairing.auto_apply && self.screens.len() > 1 {
-                let mut paired_count = 0;
                 let match_mode = self.config.display.match_mode;
 
                 for other_screen in &self.screens {
@@ -600,11 +629,12 @@ impl App {
                         .filter(|w| w.matches_screen_with_mode(other_screen, match_mode))
                         .collect();
 
-                    // Find best match based on pairing history
+                    // Find best match based on pairing history + color similarity
                     if let Some(best_match) = self.pairing_history.get_best_match(
                         &wp_path,
                         &other_screen.name,
                         &matching,
+                        &wp_colors,
                     ) {
                         if let Err(e) = swww::set_wallpaper_with_resize(
                             &other_screen.name,
@@ -615,25 +645,27 @@ impl App {
                         ) {
                             self.last_error = Some(format!("Pairing {}: {}", other_screen.name, e));
                         } else {
+                            // Update current wallpaper for this screen too
+                            self.current_wallpapers.insert(other_screen.name.clone(), best_match);
                             paired_count += 1;
                         }
                     }
                 }
-
-                // Show undo popup if we auto-applied
-                if paired_count > 0 {
-                    self.pairing_history.begin_undo(
-                        previous_state,
-                        format!("Auto-paired {} screen(s)", paired_count),
-                        self.config.pairing.undo_window_secs,
-                    );
-                }
             }
 
-            // Record this pairing in history
-            let mut current_wallpapers = std::collections::HashMap::new();
-            current_wallpapers.insert(screen_name.clone(), wp_path.clone());
-            self.pairing_history.record_pairing(current_wallpapers, true);
+            // Show undo popup if we auto-applied
+            if paired_count > 0 {
+                self.pairing_history.begin_undo(
+                    previous_state,
+                    format!("Auto-paired {} screen(s)", paired_count),
+                    self.config.pairing.undo_window_secs,
+                );
+            }
+
+            // Record the full pairing in history (all screens with wallpapers)
+            if self.config.pairing.enabled && self.current_wallpapers.len() > 1 {
+                self.pairing_history.record_pairing(self.current_wallpapers.clone(), true);
+            }
 
             // Export pywal colors if enabled
             if self.pywal_export {
@@ -648,15 +680,17 @@ impl App {
     /// Handle undo action (restore previous wallpapers)
     pub fn do_undo(&mut self) -> Result<()> {
         if let Some(previous) = self.pairing_history.do_undo() {
-            for (screen_name, wp_path) in previous {
+            for (screen_name, wp_path) in &previous {
                 swww::set_wallpaper_with_resize(
-                    &screen_name,
-                    &wp_path,
+                    screen_name,
+                    wp_path,
                     &self.config.transition(),
                     self.config.display.resize_mode,
                     &self.config.display.fill_color,
                 )?;
             }
+            // Restore current_wallpapers tracking
+            self.current_wallpapers = previous;
         }
         Ok(())
     }
@@ -909,9 +943,9 @@ impl App {
             return;
         }
 
-        // Get selected wallpaper path
-        let selected_path = match self.selected_wallpaper() {
-            Some(wp) => wp.path.clone(),
+        // Get selected wallpaper path and colors
+        let (selected_path, selected_colors) = match self.selected_wallpaper() {
+            Some(wp) => (wp.path.clone(), wp.colors.clone()),
             None => return,
         };
 
@@ -929,11 +963,12 @@ impl App {
                 .filter(|wp| wp.matches_screen_with_mode(screen, match_mode))
                 .collect();
 
-            // Find best match based on pairing history
+            // Find best match based on pairing history + color similarity
             if let Some(suggested_path) = self.pairing_history.get_best_match(
                 &selected_path,
                 &screen.name,
                 &matching,
+                &selected_colors,
             ) {
                 if !self.pairing_suggestions.contains(&suggested_path) {
                     self.pairing_suggestions.push(suggested_path);

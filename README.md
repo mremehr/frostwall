@@ -75,6 +75,11 @@ frostwall tag show nature
 # pywal color export
 frostwall pywal ~/Pictures/wallpapers/forest.jpg         # Export colors
 frostwall pywal ~/Pictures/wallpapers/forest.jpg --apply # Export + apply
+
+# Pairing management
+frostwall pair stats
+frostwall pair clear
+frostwall pair suggest ~/Pictures/wallpapers/forest.jpg
 ```
 
 ### Watch Daemon
@@ -91,6 +96,22 @@ Features:
 - Configurable interval (30s, 5m, 1h, etc.)
 - File system monitoring (inotify) - auto-updates cache when files change
 - Shuffle or sequential mode
+
+### Intelligent Pairing
+
+Multi-monitor wallpaper pairing that learns from your choices:
+
+- **Affinity tracking** - Records which wallpapers you use together
+- **Color-based fallback** - Suggests wallpapers with similar colors when no history exists
+- **Auto-apply mode** - Automatically sets matching wallpapers on other screens
+- **Undo support** - Revert auto-paired changes within configurable time window
+- **Position memory** - TUI remembers your browsing position per screen
+
+```bash
+frostwall pair stats              # View pairing statistics
+frostwall pair clear              # Clear pairing history
+frostwall pair suggest <path>     # Get suggestions for a wallpaper
+```
 
 ### Additional Features
 
@@ -148,6 +169,13 @@ grid_columns = 3
 
 [theme]
 mode = "auto"              # auto, light, dark
+
+[pairing]
+enabled = true             # Enable intelligent pairing
+auto_apply = false         # Auto-set wallpapers on other screens
+undo_window_secs = 5       # Seconds to allow undo after auto-apply
+auto_apply_threshold = 0.7 # Minimum confidence for auto-apply
+max_history_records = 1000 # Maximum pairing records to keep
 ```
 
 ## Keybindings (TUI)
@@ -167,8 +195,9 @@ mode = "auto"              # auto, light, dark
 | `T` | Clear tag filter |
 | `w` | Export pywal colors |
 | `W` | Toggle auto pywal export |
-| `Tab` | Next screen |
-| `Shift+Tab` | Previous screen |
+| `u` | Undo auto-pairing |
+| `Tab` | Next screen (remembers position) |
+| `Shift+Tab` | Previous screen (remembers position) |
 | `?` | Show help popup |
 | `q` / `Esc` | Quit |
 
@@ -184,6 +213,7 @@ src/
   thumbnail.rs  # SIMD thumbnail generation & disk cache
   pywal.rs      # pywal color export
   profile.rs    # Profile management
+  pairing.rs    # Intelligent wallpaper pairing & history
   watch.rs      # Watch daemon with inotify
   init.rs       # Interactive setup wizard
   utils.rs      # Shared utilities
@@ -206,6 +236,7 @@ src/
 - **Config**: `~/.config/frostwall/config.toml`
 - **Wallpaper metadata**: `~/.cache/frostwall/wallpaper_cache.json`
 - **Thumbnails**: `~/.cache/frostwall/thumbs_v2/`
+- **Pairing history**: `~/.cache/frostwall/pairing_history.json`
 
 ## Theme Integration
 
@@ -257,6 +288,8 @@ frostwall random
 - **Parallel Scanning** - Multi-core wallpaper scanning with rayon
 - **Recursive Scanning** - Scan subdirectories with `recursive = true`
 - **Configurable Keybindings** - Customize keyboard shortcuts in config
+- **Intelligent Pairing** - Learn wallpaper combinations, color-based suggestions
+- **Position Memory** - TUI remembers position per screen when switching
 
 ### Planned Features
 

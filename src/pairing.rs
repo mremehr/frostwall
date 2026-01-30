@@ -211,11 +211,14 @@ impl PairingHistory {
     }
 
     /// Get the best matching wallpaper for other screens
+    /// Returns the wallpaper with highest affinity score, or falls back to
+    /// a wallpaper with similar colors if no history exists.
     pub fn get_best_match(
         &self,
         selected_wp: &Path,
-        target_screen: &str,
+        _target_screen: &str,
         available_wallpapers: &[&crate::wallpaper::Wallpaper],
+        selected_colors: &[String],
     ) -> Option<PathBuf> {
         if available_wallpapers.is_empty() {
             return None;
@@ -224,10 +227,22 @@ impl PairingHistory {
         let mut best_match: Option<(PathBuf, f32)> = None;
 
         for wp in available_wallpapers {
-            let score = self.get_affinity(selected_wp, &wp.path);
+            // Skip the same wallpaper
+            if wp.path == selected_wp {
+                continue;
+            }
 
-            // Add bonus for shared tags
-            // (This would require passing the selected wallpaper's tags)
+            // Base score from pairing history
+            let mut score = self.get_affinity(selected_wp, &wp.path);
+
+            // Bonus for shared colors (fallback when no history)
+            let shared_colors = wp.colors.iter()
+                .filter(|c| selected_colors.contains(c))
+                .count();
+            score += shared_colors as f32 * 0.5;
+
+            // Bonus for shared tags
+            // (would need selected wallpaper's tags passed in)
 
             if let Some((_, best_score)) = &best_match {
                 if score > *best_score {
