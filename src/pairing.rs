@@ -225,11 +225,17 @@ impl PairingHistory {
         }
 
         let mut best_match: Option<(PathBuf, f32)> = None;
+        let mut fallback: Option<PathBuf> = None;
 
         for wp in available_wallpapers {
             // Skip the same wallpaper
             if wp.path == selected_wp {
                 continue;
+            }
+
+            // Keep track of first valid wallpaper as fallback
+            if fallback.is_none() {
+                fallback = Some(wp.path.clone());
             }
 
             // Base score from pairing history
@@ -246,12 +252,13 @@ impl PairingHistory {
                 if score > *best_score {
                     best_match = Some((wp.path.clone(), score));
                 }
-            } else if score > 0.0 {
+            } else {
                 best_match = Some((wp.path.clone(), score));
             }
         }
 
-        best_match.map(|(path, _)| path)
+        // Return best match, or fallback to first available wallpaper
+        best_match.map(|(path, _)| path).or(fallback)
     }
 
     /// Get affinity score between two wallpapers

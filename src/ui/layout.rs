@@ -199,6 +199,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
         ));
     }
 
+    // Pairing suggestions indicator
+    if !app.pairing_suggestions.is_empty() {
+        header_spans.push(Span::styled(" ", Style::default()));
+        header_spans.push(Span::styled(
+            format!("[⚡{}]", app.pairing_suggestions.len()),
+            Style::default().fg(theme.success),
+        ));
+    }
+
     let header = Line::from(header_spans);
 
     let paragraph = Paragraph::new(header).alignment(Alignment::Center);
