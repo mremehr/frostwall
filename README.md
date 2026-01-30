@@ -10,6 +10,7 @@ Managing wallpapers across multiple monitors with different aspect ratios (ultra
 
 - **Smart matching**: Automatically filters wallpapers that fit each screen's aspect category
 - **Multi-monitor aware**: Detects all connected outputs via niri/wlr-randr
+- **Intelligent pairing**: Learns which wallpapers you use together and suggests matches
 - **Visual browsing**: TUI with real image thumbnails (Kitty/Sixel graphics protocols)
 - **Scriptable**: CLI commands for keybindings, scripts, and automation
 
@@ -30,13 +31,90 @@ Match modes control filtering:
 | **Flexible** | Compatible ratios (landscape works on ultrawide, etc.) |
 | **All** | Show every wallpaper regardless of aspect |
 
-### Resize Modes
+### Intelligent Pairing
 
-Control how wallpapers fit the screen:
-- **Crop** (default) - Fill screen, crop excess
-- **Fit** - Fit inside screen with letterboxing
-- **Center** - No resize, center image
-- **Stretch** - Fill screen (distorts aspect)
+Multi-monitor wallpaper pairing that learns from your choices:
+
+- **Affinity tracking** - Records which wallpapers you use together
+- **LAB color matching** - Suggests wallpapers with perceptually similar colors
+- **Auto-apply mode** - Automatically sets matching wallpapers on other screens
+- **Visual indicators** - Green borders highlight suggestions, header shows `[⚡N]`
+- **Undo support** - Revert auto-paired changes within configurable time window
+- **Position memory** - TUI remembers your browsing position per screen
+
+### Auto-Tagging
+
+Automatic content detection based on color analysis:
+
+```bash
+frostwall color-tag              # Auto-tag all wallpapers
+frostwall color-tag --incremental # Only tag new wallpapers
+```
+
+12 built-in tag categories:
+`nature`, `ocean`, `forest`, `sunset`, `dark`, `bright`, `cyberpunk`, `minimal`, `mountain`, `space`, `autumn`, `pastel`
+
+Tags are assigned based on:
+- Brightness range matching
+- Saturation range matching
+- Color palette similarity (LAB/Delta-E)
+
+### Time-Based Profiles
+
+Automatic wallpaper selection based on time of day:
+
+```bash
+frostwall time-profile status    # Show current period & settings
+frostwall time-profile enable    # Enable time-based selection
+frostwall time-profile preview   # Preview matching wallpapers
+frostwall time-profile apply     # Set wallpaper for current time
+```
+
+Time periods:
+| Period | Hours | Default preferences |
+|--------|-------|---------------------|
+| Morning | 6-12 | Bright, nature, pastel |
+| Afternoon | 12-18 | Nature, ocean, mountain |
+| Evening | 18-22 | Sunset, autumn, cyberpunk |
+| Night | 22-6 | Dark, space, minimal |
+
+### Web Gallery Import
+
+Download wallpapers from popular galleries:
+
+```bash
+# Wallhaven (no API key required)
+frostwall import wallhaven "nature 4k"
+frostwall import featured --count 20
+frostwall import download <wallhaven-id>
+
+# Unsplash (requires API key)
+export UNSPLASH_ACCESS_KEY=your_key
+frostwall import unsplash "mountains"
+```
+
+### Collections (Presets)
+
+Save and recall multi-screen wallpaper combinations:
+
+```bash
+frostwall collection save "work-setup"        # Save current wallpapers
+frostwall collection save "gaming" -d "RGB!"  # With description
+frostwall collection list                      # List all collections
+frostwall collection show "work-setup"         # Show details
+frostwall collection apply "work-setup"        # Restore collection
+frostwall collection delete "work-setup"       # Delete collection
+```
+
+### Image Similarity Search
+
+Find wallpapers with similar color profiles:
+
+```bash
+frostwall similar ~/Pictures/wallpapers/favorite.jpg --limit 10
+```
+
+Uses LAB color space for perceptually accurate matching.
 
 ### TUI Mode
 
@@ -46,6 +124,25 @@ Interactive terminal interface with:
 - Live screen switching (Tab/Shift+Tab)
 - Instant wallpaper application with animated transitions
 - Auto-detects terminal theme (Frostglow Light / Deep Cracked Ice Dark)
+- **Vim-style command mode** (`:` key)
+
+### Command Mode
+
+Press `:` in TUI for vim-style commands:
+
+| Command | Description |
+|---------|-------------|
+| `:t <tag>` | Filter by tag (fuzzy match) |
+| `:tag` | List all available tags |
+| `:clear` / `:c` | Clear all filters |
+| `:random` / `:r` | Random wallpaper |
+| `:apply` / `:a` | Apply current wallpaper |
+| `:similar` / `:sim` | Find similar wallpapers |
+| `:sort name/date/size` | Change sort mode |
+| `:screen <n>` | Switch to screen n |
+| `:go <n>` | Go to wallpaper n |
+| `:help` / `:h` | Show help |
+| `:q` / `:quit` | Quit |
 
 ### CLI Commands
 
@@ -59,27 +156,38 @@ frostwall scan         # Rescan wallpaper directory
 frostwall init         # Interactive setup wizard
 frostwall watch        # Background daemon for auto-rotation
 
+# Tag management
+frostwall tag list
+frostwall tag add ~/wallpapers/forest.jpg nature
+frostwall tag show nature
+frostwall color-tag                    # Auto-tag by colors
+
+# Pairing management
+frostwall pair stats
+frostwall pair suggest ~/wallpapers/forest.jpg
+
+# Collections
+frostwall collection save "my-preset"
+frostwall collection apply "my-preset"
+
+# Time profiles
+frostwall time-profile status
+frostwall time-profile apply
+
+# Web import
+frostwall import wallhaven "nature"
+frostwall import featured
+
+# Similarity search
+frostwall similar ~/wallpapers/forest.jpg
+
 # Profile management
 frostwall profile list
 frostwall profile create work
 frostwall profile use work
-frostwall profile set work directory ~/Pictures/work
-frostwall profile delete work
-
-# Tag management
-frostwall tag list
-frostwall tag add ~/Pictures/wallpapers/forest.jpg nature
-frostwall tag remove ~/Pictures/wallpapers/forest.jpg nature
-frostwall tag show nature
 
 # pywal color export
-frostwall pywal ~/Pictures/wallpapers/forest.jpg         # Export colors
-frostwall pywal ~/Pictures/wallpapers/forest.jpg --apply # Export + apply
-
-# Pairing management
-frostwall pair stats
-frostwall pair clear
-frostwall pair suggest ~/Pictures/wallpapers/forest.jpg
+frostwall pywal ~/wallpapers/forest.jpg --apply
 ```
 
 ### Watch Daemon
@@ -96,26 +204,21 @@ Features:
 - Configurable interval (30s, 5m, 1h, etc.)
 - File system monitoring (inotify) - auto-updates cache when files change
 - Shuffle or sequential mode
+- **Time-profile aware** - respects time-based preferences when enabled
 
-### Intelligent Pairing
+### Resize Modes
 
-Multi-monitor wallpaper pairing that learns from your choices:
-
-- **Affinity tracking** - Records which wallpapers you use together
-- **Color-based fallback** - Suggests wallpapers with similar colors when no history exists
-- **Auto-apply mode** - Automatically sets matching wallpapers on other screens
-- **Undo support** - Revert auto-paired changes within configurable time window
-- **Position memory** - TUI remembers your browsing position per screen
-
-```bash
-frostwall pair stats              # View pairing statistics
-frostwall pair clear              # Clear pairing history
-frostwall pair suggest <path>     # Get suggestions for a wallpaper
-```
+Control how wallpapers fit the screen:
+- **Crop** (default) - Fill screen, crop excess
+- **Fit** - Fit inside screen with letterboxing
+- **Center** - No resize, center image
+- **Stretch** - Fill screen (distorts aspect)
 
 ### Additional Features
 
 - **Dominant color extraction** - k-means clustering extracts 5 primary colors per wallpaper
+- **LAB color space** - Perceptually accurate color matching (Delta-E/CIE76)
+- **2-phase scanning** - Fast header scan, then parallel color extraction
 - **Thumbnail caching** - SIMD-accelerated (fast_image_resize) with disk cache
 - **Transition effects** - Fade, wipe, grow, center, outer via swww
 - **TOML configuration** - Customize paths, keybindings, transitions
@@ -172,10 +275,29 @@ mode = "auto"              # auto, light, dark
 
 [pairing]
 enabled = true             # Enable intelligent pairing
-auto_apply = false         # Auto-set wallpapers on other screens
+auto_apply = true          # Auto-set wallpapers on other screens
 undo_window_secs = 5       # Seconds to allow undo after auto-apply
 auto_apply_threshold = 0.7 # Minimum confidence for auto-apply
 max_history_records = 1000 # Maximum pairing records to keep
+
+[time_profiles]
+enabled = false            # Enable time-based wallpaper selection
+
+[time_profiles.morning]
+brightness_range = [0.5, 0.9]
+preferred_tags = ["nature", "bright", "pastel"]
+
+[time_profiles.afternoon]
+brightness_range = [0.4, 0.8]
+preferred_tags = ["nature", "ocean", "mountain"]
+
+[time_profiles.evening]
+brightness_range = [0.2, 0.6]
+preferred_tags = ["sunset", "autumn", "cyberpunk"]
+
+[time_profiles.night]
+brightness_range = [0.0, 0.4]
+preferred_tags = ["dark", "space", "minimal"]
 ```
 
 ## Keybindings (TUI)
@@ -186,6 +308,7 @@ max_history_records = 1000 # Maximum pairing records to keep
 | `l` / `→` | Next wallpaper |
 | `Enter` | Apply selected wallpaper |
 | `r` | Random wallpaper (apply immediately) |
+| `:` | **Command mode** (vim-style) |
 | `m` | Toggle match mode (Strict/Flexible/All) |
 | `f` | Toggle resize mode (Crop/Fit/Center/Stretch) |
 | `s` | Toggle sort mode (Name/Size/Date) |
@@ -205,31 +328,36 @@ max_history_records = 1000 # Maximum pairing records to keep
 
 ```
 src/
-  main.rs       # CLI entry point (clap)
-  app.rs        # TUI state & event loop
-  screen.rs     # Screen detection (niri/wlr-randr)
-  wallpaper.rs  # Wallpaper scanning, caching, matching logic
-  swww.rs       # swww daemon interface
-  thumbnail.rs  # SIMD thumbnail generation & disk cache
-  pywal.rs      # pywal color export
-  profile.rs    # Profile management
-  pairing.rs    # Intelligent wallpaper pairing & history
-  watch.rs      # Watch daemon with inotify
-  init.rs       # Interactive setup wizard
-  utils.rs      # Shared utilities
+  main.rs        # CLI entry point (clap)
+  app.rs         # TUI state & event loop
+  screen.rs      # Screen detection (niri/wlr-randr)
+  wallpaper.rs   # Wallpaper scanning, caching, matching logic
+  swww.rs        # swww daemon interface
+  thumbnail.rs   # SIMD thumbnail generation & disk cache
+  pywal.rs       # pywal color export
+  profile.rs     # Profile management
+  pairing.rs     # Intelligent wallpaper pairing & history
+  collections.rs # Wallpaper collections/presets
+  timeprofile.rs # Time-based wallpaper profiles
+  webimport.rs   # Web gallery import (Unsplash/Wallhaven)
+  utils.rs       # Color utilities, LAB matching, auto-tagging
+  watch.rs       # Watch daemon with inotify
+  init.rs        # Interactive setup wizard
+  clip.rs        # CLIP auto-tagging (optional feature)
   ui/
-    mod.rs      # UI module exports
-    theme.rs    # Frost theme (light/dark auto-detection)
-    layout.rs   # TUI layout & rendering
+    mod.rs       # UI module exports
+    theme.rs     # Frost theme (light/dark auto-detection)
+    layout.rs    # TUI layout & rendering
 ```
 
 ### Data Flow
 
 1. **Startup**: Detect screens via `niri msg outputs` or `wlr-randr`
-2. **Scan**: Load wallpaper metadata (dimensions, colors) into cache
+2. **Scan**: Load wallpaper metadata (dimensions, colors, auto-tags) into cache
 3. **Filter**: Match wallpapers to selected screen's aspect category
-4. **Display**: Render thumbnails using background thread + SIMD resize
-5. **Apply**: Call `swww img` with transition parameters
+4. **Pair**: Calculate pairing suggestions based on history + color similarity
+5. **Display**: Render thumbnails using background thread + SIMD resize
+6. **Apply**: Call `swww img` with transition parameters
 
 ### Cache Locations
 
@@ -237,6 +365,7 @@ src/
 - **Wallpaper metadata**: `~/.cache/frostwall/wallpaper_cache.json`
 - **Thumbnails**: `~/.cache/frostwall/thumbs_v2/`
 - **Pairing history**: `~/.cache/frostwall/pairing_history.json`
+- **Collections**: `~/.local/share/frostwall/collections.json`
 
 ## Theme Integration
 
@@ -271,36 +400,16 @@ sleep 0.5
 frostwall random
 ```
 
-## Roadmap
+### Cron Job for Time-Based Rotation
 
-### ✓ Implemented (v0.4.0)
+```bash
+# Change wallpaper based on time of day every hour
+0 * * * * frostwall time-profile apply
+```
 
-- **Interactive Setup** (`frostwall init`) - Guided wizard for new users
-- **Profile System** - Multiple configs for work/gaming/etc contexts
-- **Watch Daemon** (`frostwall watch`) - Auto-rotation with file monitoring
-- **Live Cache Updates** - inotify-based hot reload when files change
-- **Tagging System** - CLI and TUI tag management, filtering by tag
-- **Color Palette Display** - View dominant colors in TUI (`c` key)
-- **Sorting Modes** - Sort by name, size, or date
-- **Help Popup** - Full keybinding reference (`?` key)
-- **pywal Integration** - Export colors to ~/.cache/wal/ (`w` key or `frostwall pywal`)
-- **Color Filtering** - Filter wallpapers by color (`C` to open picker)
-- **Parallel Scanning** - Multi-core wallpaper scanning with rayon
-- **Recursive Scanning** - Scan subdirectories with `recursive = true`
-- **Configurable Keybindings** - Customize keyboard shortcuts in config
-- **Intelligent Pairing** - Learn wallpaper combinations, color-based suggestions
-- **Position Memory** - TUI remembers position per screen when switching
+## Color Data Format
 
-### Planned Features
-
-#### Auto-tagging
-Automatic content detection:
-- ML-based image classification (ONNX runtime)
-- Auto-suggest tags on scan
-
-### Color Data Format
-
-Each wallpaper stores 5 dominant colors (k-means extracted):
+Each wallpaper stores metadata including colors and auto-tags:
 
 ```json
 {
@@ -309,9 +418,28 @@ Each wallpaper stores 5 dominant colors (k-means extracted):
   "height": 2160,
   "aspect_category": "Landscape",
   "colors": ["#1a2b3c", "#4d5e6f", "#7a8b9c", "#adbccd", "#d0e1f2"],
-  "tags": ["nature", "forest", "dark"]
+  "tags": ["nature", "forest"],
+  "auto_tags": [
+    {"name": "forest", "confidence": 0.85},
+    {"name": "nature", "confidence": 0.72},
+    {"name": "dark", "confidence": 0.45}
+  ]
 }
 ```
+
+## Changelog
+
+### v0.4.0
+
+- **Command mode** - Vim-style `:` commands in TUI
+- **Auto-tagging** - Color-based automatic tag assignment
+- **Time-based profiles** - Wallpapers based on time of day
+- **Web gallery import** - Download from Unsplash/Wallhaven
+- **Collections** - Save/restore multi-screen presets
+- **Image similarity** - Find wallpapers with similar colors
+- **LAB color matching** - Perceptually accurate color comparison
+- **2-phase scanning** - Faster startup with parallel processing
+- **Pairing indicators** - Header shows suggestion count `[⚡N]`
 
 ## License
 
@@ -319,4 +447,4 @@ GPL-2.0
 
 ## Author
 
-MrMattias
+MrMattias & Claude

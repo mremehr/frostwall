@@ -17,7 +17,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
     // Check if a popup is showing (need to skip image rendering)
-    let popup_active = app.show_help || app.show_color_picker;
+    // ratatui-image renders directly to terminal, bypassing widget z-order
+    let popup_active = app.show_help || app.show_color_picker || app.pairing_history.can_undo() || app.command_mode;
 
     // Main container with frost border
     let block = Block::default()
