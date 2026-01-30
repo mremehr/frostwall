@@ -115,22 +115,51 @@ pub struct CacheStats {
 }
 
 impl Wallpaper {
-    pub fn from_path(path: &Path) -> Result<Self> {
-        const K: usize = 5; // Number of dominant colors to extract
+    /// Fast path: only read dimensions from image header (no full decode)
+    pub fn from_path_fast(path: &Path) -> Result<Self> {
+        // Only read image header - much faster than full decode!
+        let (width, height) = image::image_dimensions(path)
+            .context("Failed to read image dimensions")?;
+        let aspect_category = Self::categorize_aspect(width, height);
+
+        // Get file metadata for sorting
+        let metadata = std::fs::metadata(path).ok();
+        let file_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified_at = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            width,
+            height,
+            aspect_category,
+            colors: Vec::new(), // Colors extracted lazily
+            tags: Vec::new(),
+            auto_tags: Vec::new(),
+            embedding: None,
+            file_size,
+            modified_at,
+        })
+    }
+
+    /// Extract colors for a wallpaper (call after from_path_fast if colors needed)
+    pub fn extract_colors(&mut self) -> Result<()> {
+        if !self.colors.is_empty() {
+            return Ok(()); // Already extracted
+        }
+
+        const K: usize = 5;
         const CONVERGENCE_THRESHOLD: f32 = 2.0;
         const MAX_ITERATIONS: u32 = 100;
         const THUMBNAIL_SIZE: u32 = 256;
 
-        let img = image::open(path).context("Failed to open image")?;
-        let (width, height) = img.dimensions();
-        let aspect_category = Self::categorize_aspect(width, height);
-
-        // --- Dominant Color Extraction ---
-        // Resize for performance
+        let img = image::open(&self.path).context("Failed to open image")?;
         let thumb = img.resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, FilterType::Triangle);
         let pixels: Vec<_> = thumb.to_rgb8().pixels().cloned().collect();
 
-        // Parallel color space conversion
         let lab: Vec<Lab> = pixels
             .par_iter()
             .map(|p| {
@@ -147,12 +176,12 @@ impl Wallpaper {
             K,
             MAX_ITERATIONS as usize,
             CONVERGENCE_THRESHOLD,
-            false, // don't log kmeans output
+            false,
             &lab,
-            0, // seed
+            0,
         );
 
-        let colors: Vec<String> = result
+        self.colors = result
             .centroids
             .iter()
             .map(|c| {
@@ -163,9 +192,23 @@ impl Wallpaper {
                 format!("#{:02x}{:02x}{:02x}", r, g, b)
             })
             .collect();
-        // --- End of Color Extraction ---
 
-        // Get file metadata for sorting
+        Ok(())
+    }
+
+    /// Full path with colors (legacy, slower)
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let mut wp = Self::from_path_fast(path)?;
+        wp.extract_colors()?;
+        Ok(wp)
+    }
+
+    /// Create from path, reusing existing colors if available
+    pub fn from_path_with_existing(path: &Path, existing_colors: Option<Vec<String>>) -> Result<Self> {
+        let (width, height) = image::image_dimensions(path)
+            .context("Failed to read image dimensions")?;
+        let aspect_category = Self::categorize_aspect(width, height);
+
         let metadata = std::fs::metadata(path).ok();
         let file_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
         let modified_at = metadata
@@ -174,18 +217,25 @@ impl Wallpaper {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        Ok(Self {
+        let mut wp = Self {
             path: path.to_path_buf(),
             width,
             height,
             aspect_category,
-            colors,
+            colors: existing_colors.unwrap_or_default(),
             tags: Vec::new(),
             auto_tags: Vec::new(),
             embedding: None,
             file_size,
             modified_at,
-        })
+        };
+
+        // Extract colors if not provided
+        if wp.colors.is_empty() {
+            wp.extract_colors()?;
+        }
+
+        Ok(wp)
     }
 
     fn categorize_aspect(width: u32, height: u32) -> AspectCategory {
@@ -368,27 +418,45 @@ impl WallpaperCache {
         let total = entries.len();
         let processed = AtomicUsize::new(0);
 
-        // Parallel processing with rayon
-        let wallpapers: Vec<Wallpaper> = entries
+        // Phase 1: Fast parallel scan (header only - dimensions)
+        eprint!("Phase 1/2: Reading dimensions...");
+        let mut wallpapers: Vec<Wallpaper> = entries
             .par_iter()
             .filter_map(|path| {
                 let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                // Progress indicator every 10 files
-                if count.is_multiple_of(10) || count == total {
-                    eprint!("\rScanning: {}/{}", count, total);
+                if count.is_multiple_of(50) || count == total {
+                    eprint!("\rPhase 1/2: Reading dimensions... {}/{}", count, total);
                 }
 
-                match Wallpaper::from_path(path) {
+                match Wallpaper::from_path_fast(path) {
                     Ok(wp) => Some(wp),
                     Err(e) => {
-                        eprintln!("\nWarning: Failed to process {}: {}", path.display(), e);
+                        eprintln!("\nWarning: Failed to read {}: {}", path.display(), e);
                         None
                     }
                 }
             })
             .collect();
 
-        eprintln!(); // Newline after progress
+        eprintln!(" done!");
+
+        // Phase 2: Parallel color extraction (full decode)
+        let color_processed = AtomicUsize::new(0);
+        let color_total = wallpapers.len();
+        eprint!("Phase 2/2: Extracting colors...");
+
+        wallpapers.par_iter_mut().for_each(|wp| {
+            let count = color_processed.fetch_add(1, Ordering::Relaxed) + 1;
+            if count.is_multiple_of(10) || count == color_total {
+                eprint!("\rPhase 2/2: Extracting colors... {}/{}", count, color_total);
+            }
+
+            if let Err(e) = wp.extract_colors() {
+                eprintln!("\nWarning: Failed to extract colors for {}: {}", wp.path.display(), e);
+            }
+        });
+
+        eprintln!(" done!");
 
         // Sort by filename for consistent ordering
         let mut wallpapers = wallpapers;
