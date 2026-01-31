@@ -220,45 +220,47 @@ impl PairingHistory {
         available_wallpapers: &[&crate::wallpaper::Wallpaper],
         selected_colors: &[String],
     ) -> Option<PathBuf> {
+        self.get_top_matches(selected_wp, _target_screen, available_wallpapers, selected_colors, 1)
+            .into_iter()
+            .next()
+            .map(|(path, _)| path)
+    }
+
+    /// Get top N matching wallpapers for other screens
+    /// Returns wallpapers sorted by affinity score (highest first)
+    pub fn get_top_matches(
+        &self,
+        selected_wp: &Path,
+        _target_screen: &str,
+        available_wallpapers: &[&crate::wallpaper::Wallpaper],
+        selected_colors: &[String],
+        limit: usize,
+    ) -> Vec<(PathBuf, f32)> {
         if available_wallpapers.is_empty() {
-            return None;
+            return Vec::new();
         }
 
-        let mut best_match: Option<(PathBuf, f32)> = None;
-        let mut fallback: Option<PathBuf> = None;
+        let mut scored: Vec<(PathBuf, f32)> = available_wallpapers
+            .iter()
+            .filter(|wp| wp.path != selected_wp)
+            .map(|wp| {
+                // Base score from pairing history
+                let mut score = self.get_affinity(selected_wp, &wp.path);
 
-        for wp in available_wallpapers {
-            // Skip the same wallpaper
-            if wp.path == selected_wp {
-                continue;
-            }
+                // Bonus for similar colors using perceptual LAB distance
+                let color_similarity = crate::utils::palette_similarity(selected_colors, &wp.colors);
+                score += color_similarity * 5.0; // Weight color similarity
 
-            // Keep track of first valid wallpaper as fallback
-            if fallback.is_none() {
-                fallback = Some(wp.path.clone());
-            }
+                (wp.path.clone(), score)
+            })
+            .collect();
 
-            // Base score from pairing history
-            let mut score = self.get_affinity(selected_wp, &wp.path);
+        // Sort by score descending
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Bonus for similar colors using perceptual LAB distance
-            let color_similarity = crate::utils::palette_similarity(selected_colors, &wp.colors);
-            score += color_similarity * 5.0; // Weight color similarity
-
-            // Bonus for shared tags
-            // (would need selected wallpaper's tags passed in)
-
-            if let Some((_, best_score)) = &best_match {
-                if score > *best_score {
-                    best_match = Some((wp.path.clone(), score));
-                }
-            } else {
-                best_match = Some((wp.path.clone(), score));
-            }
-        }
-
-        // Return best match, or fallback to first available wallpaper
-        best_match.map(|(path, _)| path).or(fallback)
+        // Return top N
+        scored.truncate(limit);
+        scored
     }
 
     /// Get affinity score between two wallpapers

@@ -6,11 +6,12 @@ FrostWall automatically detects your screen configurations and intelligently mat
 
 ## Vision
 
-Managing wallpapers across multiple monitors with different aspect ratios (ultrawide, portrait, landscape) is tedious. FrostWall solves this by:
+Managing wallpapers across multiple monitors with different aspect ratios (ultrawide, portrait, landscape) is tedious. FrostWall transforms this into a seamless, visual experience:
 
 - **Smart matching**: Automatically filters wallpapers that fit each screen's aspect category
 - **Multi-monitor aware**: Detects all connected outputs via niri/wlr-randr
-- **Intelligent pairing**: Learns which wallpapers you use together and suggests matches
+- **Visual pairing**: Split-view interface lets you see your selected wallpaper alongside suggested matches for other screens - pick the perfect combination with real thumbnail previews
+- **Color harmony**: LAB color space matching ensures your multi-monitor setup looks cohesive
 - **Visual browsing**: TUI with real image thumbnails (Kitty/Sixel graphics protocols)
 - **Scriptable**: CLI commands for keybindings, scripts, and automation
 
@@ -31,15 +32,35 @@ Match modes control filtering:
 | **Flexible** | Compatible ratios (landscape works on ultrawide, etc.) |
 | **All** | Show every wallpaper regardless of aspect |
 
-### Intelligent Pairing
+### Visual Pairing Preview
+
+The killer feature: press `p` to enter pairing mode and see a split-view with:
+
+```
+┌────────────────────────────────┬─────────────────┐
+│                                │  Pair 1/3       │
+│     [Your selected wallpaper]  │  ┌───────────┐  │
+│          65% width             │  │ DP-1 thumb│  │
+│                                │  └───────────┘  │
+│                                │  ┌───────────┐  │
+│                                │  │ DP-2 thumb│  │
+│                                │  └───────────┘  │
+└────────────────────────────────┴─────────────────┘
+```
+
+- **Real thumbnails** - See actual images, not just filenames
+- **Multiple alternatives** - Cycle through top 3 matches with `←`/`→`
+- **Color-based suggestions** - Matches based on LAB color similarity
+- **History learning** - Remembers which wallpapers you pair together
+- **One-press apply** - `Enter` sets all screens at once
+
+### Intelligent Pairing System
 
 Multi-monitor wallpaper pairing that learns from your choices:
 
 - **Affinity tracking** - Records which wallpapers you use together
 - **LAB color matching** - Suggests wallpapers with perceptually similar colors
-- **Auto-apply mode** - Automatically sets matching wallpapers on other screens
-- **Visual indicators** - Green borders highlight suggestions, header shows `[⚡N]`
-- **Undo support** - Revert auto-paired changes within configurable time window
+- **Score-based ranking** - Combines history + color similarity for best matches
 - **Position memory** - TUI remembers your browsing position per screen
 
 ### Auto-Tagging
@@ -122,6 +143,7 @@ Interactive terminal interface with:
 - Real image thumbnails via ratatui-image (Kitty/Sixel protocols)
 - Carousel navigation with selection highlighting
 - Live screen switching (Tab/Shift+Tab)
+- **Visual pairing preview** (`p` key) with split-view thumbnails
 - Instant wallpaper application with animated transitions
 - Auto-detects terminal theme (Frostglow Light / Deep Cracked Ice Dark)
 - **Vim-style command mode** (`:` key)
@@ -275,9 +297,6 @@ mode = "auto"              # auto, light, dark
 
 [pairing]
 enabled = true             # Enable intelligent pairing
-auto_apply = true          # Auto-set wallpapers on other screens
-undo_window_secs = 5       # Seconds to allow undo after auto-apply
-auto_apply_threshold = 0.7 # Minimum confidence for auto-apply
 max_history_records = 1000 # Maximum pairing records to keep
 
 [time_profiles]
@@ -307,6 +326,7 @@ preferred_tags = ["dark", "space", "minimal"]
 | `h` / `←` | Previous wallpaper |
 | `l` / `→` | Next wallpaper |
 | `Enter` | Apply selected wallpaper |
+| `p` | **Pairing preview** - split-view with suggestions |
 | `r` | Random wallpaper (apply immediately) |
 | `:` | **Command mode** (vim-style) |
 | `m` | Toggle match mode (Strict/Flexible/All) |
@@ -318,11 +338,19 @@ preferred_tags = ["dark", "space", "minimal"]
 | `T` | Clear tag filter |
 | `w` | Export pywal colors |
 | `W` | Toggle auto pywal export |
-| `u` | Undo auto-pairing |
 | `Tab` | Next screen (remembers position) |
 | `Shift+Tab` | Previous screen (remembers position) |
 | `?` | Show help popup |
 | `q` / `Esc` | Quit |
+
+### Pairing Preview Mode (`p`)
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Cycle through alternatives (1/3, 2/3, 3/3) |
+| `1` / `2` / `3` | Jump to specific alternative |
+| `Enter` | Apply all wallpapers (selected + suggestions) |
+| `p` / `Esc` | Close pairing preview |
 
 ## Architecture
 
@@ -356,8 +384,8 @@ src/
 2. **Scan**: Load wallpaper metadata (dimensions, colors, auto-tags) into cache
 3. **Filter**: Match wallpapers to selected screen's aspect category
 4. **Pair**: Calculate pairing suggestions based on history + color similarity
-5. **Display**: Render thumbnails using background thread + SIMD resize
-6. **Apply**: Call `swww img` with transition parameters
+5. **Preview**: Split-view shows selected wallpaper + thumbnail suggestions
+6. **Apply**: Call `swww img` with transition parameters for all screens
 
 ### Cache Locations
 
@@ -429,6 +457,13 @@ Each wallpaper stores metadata including colors and auto-tags:
 
 ## Changelog
 
+### v0.5.0
+
+- **Visual pairing preview** - Split-view with real thumbnails for multi-monitor pairing
+- **Manual pairing control** - Press `p` to preview and select matching wallpapers
+- **Removed auto-apply** - Pairing is now intentional, not automatic
+- **Cleaner UX** - 65/35 split layout shows your selection alongside suggestions
+
 ### v0.4.0
 
 - **Command mode** - Vim-style `:` commands in TUI
@@ -439,7 +474,6 @@ Each wallpaper stores metadata including colors and auto-tags:
 - **Image similarity** - Find wallpapers with similar colors
 - **LAB color matching** - Perceptually accurate color comparison
 - **2-phase scanning** - Faster startup with parallel processing
-- **Pairing indicators** - Header shows suggestion count `[⚡N]`
 
 ## License
 

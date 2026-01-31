@@ -18,6 +18,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Check if a popup is showing (need to skip image rendering)
     // ratatui-image renders directly to terminal, bypassing widget z-order
+    // Note: show_pairing_preview renders thumbnails separately, so don't block carousel
     let popup_active = app.show_help || app.show_color_picker || app.pairing_history.can_undo() || app.command_mode;
 
     // Main container with frost border
@@ -82,6 +83,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // (ratatui-image renders directly to terminal, bypassing widget z-order)
     if popup_active {
         draw_carousel_placeholder(f, chunks[chunk_idx], &theme);
+    } else if app.show_pairing_preview && !app.pairing_preview_matches.is_empty() {
+        // Split layout: 2/3 carousel, 1/3 pairing preview
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(65),  // Carousel with selected wallpaper
+                Constraint::Percentage(35),  // Pairing preview
+            ])
+            .split(chunks[chunk_idx]);
+
+        draw_carousel_single(f, app, split[0], &theme);
+        draw_pairing_panel(f, app, split[1], &theme);
     } else {
         draw_carousel(f, app, chunks[chunk_idx], &theme);
     }
@@ -213,6 +226,172 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
 
     let paragraph = Paragraph::new(header).alignment(Alignment::Center);
     f.render_widget(paragraph, area);
+}
+
+/// Draw single selected wallpaper (for pairing split view)
+fn draw_carousel_single(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme) {
+    if app.filtered_wallpapers.is_empty() {
+        let empty = Paragraph::new("No matching wallpapers")
+            .style(Style::default().fg(theme.fg_muted))
+            .alignment(Alignment::Center);
+        let centered = center_vertically(area, 1);
+        f.render_widget(empty, centered);
+        return;
+    }
+
+    let cache_idx = app.filtered_wallpapers[app.selected_wallpaper_idx];
+
+    // Get wallpaper info
+    let filename = app.cache.wallpapers
+        .get(cache_idx)
+        .map(|wp| wp.path.file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string())
+        .unwrap_or("?".to_string());
+
+    // Request thumbnail
+    app.request_thumbnail(cache_idx);
+
+    // Calculate centered thumbnail area (larger than normal)
+    let thumb_w = (area.width - 4).min(THUMBNAIL_WIDTH + 20);
+    let thumb_h = (area.height - 3).min(THUMBNAIL_HEIGHT + 10);
+    let thumb_x = area.x + (area.width.saturating_sub(thumb_w)) / 2;
+    let thumb_y = area.y + (area.height.saturating_sub(thumb_h + 2)) / 2;
+    let thumb_area = Rect::new(thumb_x, thumb_y, thumb_w, thumb_h);
+
+    // Draw frame
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent_highlight))
+        .style(Style::default().bg(theme.bg_medium));
+
+    let inner = block.inner(thumb_area);
+    f.render_widget(block, thumb_area);
+
+    // Render image
+    if let Some(protocol) = app.get_thumbnail(cache_idx) {
+        let image = StatefulImage::new(None);
+        f.render_stateful_widget(image, inner, protocol);
+    } else {
+        // Fallback: show filename
+        let label = Paragraph::new(filename)
+            .style(Style::default().fg(theme.fg_secondary))
+            .alignment(Alignment::Center);
+        f.render_widget(label, center_vertically(inner, 1));
+    }
+
+    // Selection indicator below
+    if thumb_area.bottom() < area.y + area.height {
+        let indicator_area = Rect::new(thumb_x, thumb_area.bottom(), thumb_w, 1);
+        let indicator = Paragraph::new("▲ Selected")
+            .style(Style::default().fg(theme.accent_highlight))
+            .alignment(Alignment::Center);
+        f.render_widget(indicator, indicator_area);
+    }
+}
+
+/// Draw pairing preview panel (right side in split view)
+fn draw_pairing_panel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme) {
+    let alternatives = app.pairing_preview_alternatives();
+    let preview_idx = app.pairing_preview_idx;
+
+    // Panel border
+    let title = format!(" Pair {}/{} ", preview_idx + 1, alternatives);
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(theme.accent_highlight).add_modifier(Modifier::BOLD))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.success))
+        .style(Style::default().bg(theme.bg_dark));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.pairing_preview_matches.is_empty() {
+        let text = Paragraph::new("No suggestions")
+            .style(Style::default().fg(theme.fg_muted))
+            .alignment(Alignment::Center);
+        f.render_widget(text, center_vertically(inner, 1));
+        return;
+    }
+
+    // Collect preview data
+    let preview_data: Vec<(String, Option<usize>, String)> = app.pairing_preview_matches
+        .iter()
+        .map(|(screen_name, matches)| {
+            let idx = preview_idx.min(matches.len().saturating_sub(1));
+            if let Some((path, _)) = matches.get(idx) {
+                let cache_idx = app.cache.wallpapers.iter()
+                    .position(|wp| &wp.path == path);
+                let filename = path.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string();
+                (screen_name.clone(), cache_idx, filename)
+            } else {
+                (screen_name.clone(), None, "?".to_string())
+            }
+        })
+        .collect();
+
+    // Request all thumbnails
+    for (_, cache_idx, _) in &preview_data {
+        if let Some(ci) = cache_idx {
+            app.request_thumbnail(*ci);
+        }
+    }
+
+    // Calculate layout - vertical stack of thumbnails
+    let num_items = preview_data.len();
+    let available_height = inner.height.saturating_sub(1);
+    let item_height = (available_height / num_items as u16).min(18).max(8);
+    let thumb_h = item_height.saturating_sub(2);
+    let thumb_w = (inner.width - 2).min(thumb_h * 2); // Maintain rough aspect ratio
+
+    let mut y_offset = inner.y;
+
+    for (screen_name, cache_idx, filename) in preview_data {
+        if y_offset + item_height > inner.y + inner.height {
+            break;
+        }
+
+        // Screen name header
+        let screen_short: String = screen_name.chars().take(inner.width as usize - 2).collect();
+        let header = Paragraph::new(screen_short)
+            .style(Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD))
+            .alignment(Alignment::Center);
+        f.render_widget(header, Rect::new(inner.x, y_offset, inner.width, 1));
+        y_offset += 1;
+
+        // Thumbnail area (centered horizontally)
+        let thumb_x = inner.x + (inner.width.saturating_sub(thumb_w)) / 2;
+        let thumb_area = Rect::new(thumb_x, y_offset, thumb_w, thumb_h);
+
+        let thumb_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border))
+            .style(Style::default().bg(theme.bg_medium));
+        let thumb_inner = thumb_block.inner(thumb_area);
+        f.render_widget(thumb_block, thumb_area);
+
+        // Render thumbnail
+        if let Some(ci) = cache_idx {
+            if let Some(protocol) = app.get_thumbnail(ci) {
+                let image = StatefulImage::new(None);
+                f.render_stateful_widget(image, thumb_inner, protocol);
+            } else {
+                // Fallback: filename
+                let name_short: String = filename.chars().take(thumb_inner.width as usize).collect();
+                let label = Paragraph::new(name_short)
+                    .style(Style::default().fg(theme.fg_secondary))
+                    .alignment(Alignment::Center);
+                f.render_widget(label, center_vertically(thumb_inner, 1));
+            }
+        }
+
+        y_offset += thumb_h + 1;
+    }
 }
 
 fn draw_carousel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme) {
@@ -424,58 +603,24 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
         return;
     }
 
-    // Show pairing preview if auto_apply is enabled and there are suggestions
-    let has_preview = app.config.pairing.enabled
-        && app.config.pairing.auto_apply
-        && !app.pairing_suggestions.is_empty();
-
-    if has_preview && area.height >= 2 {
-        // Split footer into preview line and help line
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // Preview
-                Constraint::Length(1), // Help
-            ])
-            .split(area);
-
-        // Preview line showing what will be auto-paired
-        let mut preview_spans = vec![
-            Span::styled("⚡ Auto-pair: ", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-        ];
-
-        for (i, suggestion) in app.pairing_suggestions.iter().take(3).enumerate() {
-            if i > 0 {
-                preview_spans.push(Span::styled(", ", Style::default().fg(theme.fg_muted)));
-            }
-            let filename = suggestion
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("?");
-            // Truncate long names
-            let display = if filename.len() > 20 {
-                format!("{}…", &filename[..19])
-            } else {
-                filename.to_string()
-            };
-            preview_spans.push(Span::styled(display, Style::default().fg(theme.success)));
-        }
-
-        if app.pairing_suggestions.len() > 3 {
-            preview_spans.push(Span::styled(
-                format!(" +{} more", app.pairing_suggestions.len() - 3),
-                Style::default().fg(theme.fg_muted),
-            ));
-        }
-
-        let preview = Line::from(preview_spans);
-        f.render_widget(Paragraph::new(preview).alignment(Alignment::Center), chunks[0]);
-
-        // Help line
-        draw_help_line(f, chunks[1], theme);
-    } else {
-        draw_help_line(f, area, theme);
+    // Pairing preview mode - show pairing-specific help
+    if app.show_pairing_preview {
+        let help = Line::from(vec![
+            Span::styled("←/→", Style::default().fg(theme.success)),
+            Span::styled(" cycle ", Style::default().fg(theme.fg_muted)),
+            Span::styled("1-3", Style::default().fg(theme.success)),
+            Span::styled(" select ", Style::default().fg(theme.fg_muted)),
+            Span::styled("Enter", Style::default().fg(theme.success)),
+            Span::styled(" apply ", Style::default().fg(theme.fg_muted)),
+            Span::styled("p/Esc", Style::default().fg(theme.success)),
+            Span::styled(" close", Style::default().fg(theme.fg_muted)),
+        ]);
+        let paragraph = Paragraph::new(help).alignment(Alignment::Center);
+        f.render_widget(paragraph, area);
+        return;
     }
+
+    draw_help_line(f, area, theme);
 }
 
 fn draw_help_line(f: &mut Frame, area: Rect, theme: &FrostTheme) {
@@ -666,7 +811,7 @@ fn draw_color_picker(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
 fn draw_help_popup(f: &mut Frame, area: Rect, theme: &FrostTheme) {
     // Center the popup
     let popup_width = 50.min(area.width.saturating_sub(4));
-    let popup_height = 34.min(area.height.saturating_sub(4));
+    let popup_height = 35.min(area.height.saturating_sub(4));
     let popup_x = (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
@@ -774,6 +919,10 @@ fn draw_help_popup(f: &mut Frame, area: Rect, theme: &FrostTheme) {
         Line::from(vec![
             Span::styled("  C       ", Style::default().fg(theme.accent_primary)),
             Span::styled("Open color picker", Style::default().fg(theme.fg_secondary)),
+        ]),
+        Line::from(vec![
+            Span::styled("  p       ", Style::default().fg(theme.accent_primary)),
+            Span::styled("Pairing preview", Style::default().fg(theme.fg_secondary)),
         ]),
         Line::from(vec![
             Span::styled("  w       ", Style::default().fg(theme.accent_primary)),

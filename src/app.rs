@@ -410,6 +410,12 @@ pub struct App {
     pub command_mode: bool,
     /// Command input buffer
     pub command_buffer: String,
+    /// Show pairing preview popup
+    pub show_pairing_preview: bool,
+    /// Pairing preview suggestions per screen (screen_name -> [(path, score)])
+    pub pairing_preview_matches: HashMap<String, Vec<(PathBuf, f32)>>,
+    /// Selected index in pairing preview (which alternative)
+    pub pairing_preview_idx: usize,
 }
 
 impl App {
@@ -462,6 +468,9 @@ impl App {
             screen_positions: HashMap::new(),
             command_mode: false,
             command_buffer: String::new(),
+            show_pairing_preview: false,
+            pairing_preview_matches: HashMap::new(),
+            pairing_preview_idx: 0,
         })
     }
 
@@ -611,9 +620,6 @@ impl App {
             let wp_path = wp.path.clone();
             let wp_colors = wp.colors.clone();
 
-            // Save previous state for undo
-            let previous_state = self.current_wallpapers.clone();
-
             // Update current wallpaper for this screen
             self.current_wallpapers.insert(screen_name.clone(), wp_path.clone());
 
@@ -624,59 +630,6 @@ impl App {
                 self.config.display.resize_mode,
                 &self.config.display.fill_color,
             )?;
-
-            // Intelligent pairing: auto-apply to other screens
-            let mut paired_count = 0;
-            if self.config.pairing.enabled && self.config.pairing.auto_apply && self.screens.len() > 1 {
-                let match_mode = self.config.display.match_mode;
-
-                for other_screen in &self.screens {
-                    if other_screen.name == screen_name {
-                        continue;
-                    }
-
-                    // Get wallpapers that match this screen
-                    let matching: Vec<_> = self.cache.wallpapers.iter()
-                        .filter(|w| w.matches_screen_with_mode(other_screen, match_mode))
-                        .collect();
-
-                    // Find best match based on pairing history + color similarity
-                    if let Some(best_match) = self.pairing_history.get_best_match(
-                        &wp_path,
-                        &other_screen.name,
-                        &matching,
-                        &wp_colors,
-                    ) {
-                        if let Err(e) = swww::set_wallpaper_with_resize(
-                            &other_screen.name,
-                            &best_match,
-                            &self.config.transition(),
-                            self.config.display.resize_mode,
-                            &self.config.display.fill_color,
-                        ) {
-                            self.last_error = Some(format!("Pairing {}: {}", other_screen.name, e));
-                        } else {
-                            // Update current wallpaper for this screen too
-                            self.current_wallpapers.insert(other_screen.name.clone(), best_match);
-                            paired_count += 1;
-                        }
-                    }
-                }
-            }
-
-            // Show undo popup if we auto-applied
-            if paired_count > 0 {
-                self.pairing_history.begin_undo(
-                    previous_state,
-                    format!("Auto-paired {} screen(s)", paired_count),
-                    self.config.pairing.undo_window_secs,
-                );
-            }
-
-            // Record the full pairing in history (all screens with wallpapers)
-            if self.config.pairing.enabled && self.current_wallpapers.len() > 1 {
-                self.pairing_history.record_pairing(self.current_wallpapers.clone(), true);
-            }
 
             // Export pywal colors if enabled
             if self.pywal_export {
@@ -1166,6 +1119,126 @@ impl App {
     pub fn is_pairing_suggestion(&self, path: &std::path::Path) -> bool {
         self.pairing_suggestions.iter().any(|p| p == path)
     }
+
+    /// Toggle pairing preview popup
+    pub fn toggle_pairing_preview(&mut self) {
+        if !self.show_pairing_preview {
+            self.update_pairing_preview_matches();
+        }
+        self.show_pairing_preview = !self.show_pairing_preview;
+        self.pairing_preview_idx = 0;
+    }
+
+    /// Update pairing preview matches for all other screens
+    fn update_pairing_preview_matches(&mut self) {
+        self.pairing_preview_matches.clear();
+
+        if !self.config.pairing.enabled || self.screens.len() <= 1 {
+            return;
+        }
+
+        let (selected_path, selected_colors) = match self.selected_wallpaper() {
+            Some(wp) => (wp.path.clone(), wp.colors.clone()),
+            None => return,
+        };
+
+        let match_mode = self.config.display.match_mode;
+
+        for (screen_idx, screen) in self.screens.iter().enumerate() {
+            if screen_idx == self.selected_screen_idx {
+                continue;
+            }
+
+            // Get wallpapers that match this screen
+            let matching: Vec<_> = self.cache.wallpapers.iter()
+                .filter(|wp| wp.matches_screen_with_mode(screen, match_mode))
+                .collect();
+
+            // Get top 3 matches
+            let top_matches = self.pairing_history.get_top_matches(
+                &selected_path,
+                &screen.name,
+                &matching,
+                &selected_colors,
+                3,
+            );
+
+            if !top_matches.is_empty() {
+                self.pairing_preview_matches.insert(screen.name.clone(), top_matches);
+            }
+        }
+    }
+
+    /// Cycle through pairing preview alternatives
+    pub fn pairing_preview_next(&mut self) {
+        let max_alternatives = self.pairing_preview_matches.values()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(1);
+
+        if max_alternatives > 0 {
+            self.pairing_preview_idx = (self.pairing_preview_idx + 1) % max_alternatives;
+        }
+    }
+
+    pub fn pairing_preview_prev(&mut self) {
+        let max_alternatives = self.pairing_preview_matches.values()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(1);
+
+        if max_alternatives > 0 {
+            self.pairing_preview_idx = if self.pairing_preview_idx == 0 {
+                max_alternatives - 1
+            } else {
+                self.pairing_preview_idx - 1
+            };
+        }
+    }
+
+    /// Apply the currently selected pairing preview
+    pub fn apply_pairing_preview(&mut self) -> Result<()> {
+        if !self.show_pairing_preview {
+            return Ok(());
+        }
+
+        // First apply the selected wallpaper to current screen
+        self.apply_wallpaper()?;
+
+        // Then apply the preview selections to other screens
+        for (screen_name, matches) in &self.pairing_preview_matches {
+            let idx = self.pairing_preview_idx.min(matches.len().saturating_sub(1));
+            if let Some((wp_path, _)) = matches.get(idx) {
+                if let Err(e) = swww::set_wallpaper_with_resize(
+                    screen_name,
+                    wp_path,
+                    &self.config.transition(),
+                    self.config.display.resize_mode,
+                    &self.config.display.fill_color,
+                ) {
+                    self.last_error = Some(format!("Pairing {}: {}", screen_name, e));
+                } else {
+                    self.current_wallpapers.insert(screen_name.clone(), wp_path.clone());
+                }
+            }
+        }
+
+        // Record the pairing
+        if self.current_wallpapers.len() > 1 {
+            self.pairing_history.record_pairing(self.current_wallpapers.clone(), true);
+        }
+
+        self.show_pairing_preview = false;
+        Ok(())
+    }
+
+    /// Get the number of alternatives available in pairing preview
+    pub fn pairing_preview_alternatives(&self) -> usize {
+        self.pairing_preview_matches.values()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 pub async fn run_tui(wallpaper_dir: PathBuf) -> Result<()> {
@@ -1321,6 +1394,37 @@ fn run_app<B: ratatui::backend::Backend>(
                         continue;
                     }
 
+                    // Handle pairing preview popup
+                    if app.show_pairing_preview {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('p') => {
+                                app.show_pairing_preview = false;
+                            }
+                            KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('n') => {
+                                app.pairing_preview_next();
+                            }
+                            KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('N') => {
+                                app.pairing_preview_prev();
+                            }
+                            KeyCode::Enter => {
+                                if let Err(e) = app.apply_pairing_preview() {
+                                    app.last_error = Some(format!("{}", e));
+                                }
+                            }
+                            KeyCode::Char('1') => {
+                                app.pairing_preview_idx = 0;
+                            }
+                            KeyCode::Char('2') => {
+                                app.pairing_preview_idx = 1;
+                            }
+                            KeyCode::Char('3') => {
+                                app.pairing_preview_idx = 2;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     // Handle command mode (vim-style :)
                     if app.command_mode {
                         match key.code {
@@ -1389,6 +1493,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('s') => app.toggle_sort_mode(),
                             KeyCode::Char('c') => app.toggle_colors(),
                             KeyCode::Char('C') => app.toggle_color_picker(),
+                            KeyCode::Char('p') => app.toggle_pairing_preview(),
                             KeyCode::Char('t') => app.cycle_tag_filter(),
                             KeyCode::Char('T') => app.clear_tag_filter(),
                             KeyCode::Char('w') => {
