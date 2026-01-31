@@ -605,13 +605,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
 
     // Pairing preview mode - show pairing-specific help
     if app.show_pairing_preview {
+        let sep = Span::styled(" │ ", Style::default().fg(theme.fg_muted));
+
         let help = Line::from(vec![
             Span::styled("←/→", Style::default().fg(theme.success)),
-            Span::styled(" cycle ", Style::default().fg(theme.fg_muted)),
+            Span::styled(" cycle", Style::default().fg(theme.fg_muted)),
+            sep.clone(),
             Span::styled("1-3", Style::default().fg(theme.success)),
-            Span::styled(" select ", Style::default().fg(theme.fg_muted)),
+            Span::styled(" select", Style::default().fg(theme.fg_muted)),
+            sep.clone(),
             Span::styled("Enter", Style::default().fg(theme.success)),
-            Span::styled(" apply ", Style::default().fg(theme.fg_muted)),
+            Span::styled(" apply", Style::default().fg(theme.fg_muted)),
+            sep.clone(),
             Span::styled("p/Esc", Style::default().fg(theme.success)),
             Span::styled(" close", Style::default().fg(theme.fg_muted)),
         ]);
@@ -624,15 +629,24 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
 }
 
 fn draw_help_line(f: &mut Frame, area: Rect, theme: &FrostTheme) {
+    let sep = Span::styled(" │ ", Style::default().fg(theme.fg_muted));
+
     let help = Line::from(vec![
         Span::styled("←/→", Style::default().fg(theme.accent_primary)),
-        Span::styled(" nav ", Style::default().fg(theme.fg_muted)),
+        Span::styled(" nav", Style::default().fg(theme.fg_muted)),
+        sep.clone(),
         Span::styled("Enter", Style::default().fg(theme.accent_primary)),
-        Span::styled(" apply ", Style::default().fg(theme.fg_muted)),
+        Span::styled(" apply", Style::default().fg(theme.fg_muted)),
+        sep.clone(),
+        Span::styled("p", Style::default().fg(theme.accent_primary)),
+        Span::styled(" pair", Style::default().fg(theme.fg_muted)),
+        sep.clone(),
         Span::styled(":", Style::default().fg(theme.accent_primary)),
-        Span::styled(" cmd ", Style::default().fg(theme.fg_muted)),
+        Span::styled(" cmd", Style::default().fg(theme.fg_muted)),
+        sep.clone(),
         Span::styled("?", Style::default().fg(theme.accent_primary)),
-        Span::styled(" help ", Style::default().fg(theme.fg_muted)),
+        Span::styled(" help", Style::default().fg(theme.fg_muted)),
+        sep.clone(),
         Span::styled("q", Style::default().fg(theme.accent_primary)),
         Span::styled(" quit", Style::default().fg(theme.fg_muted)),
     ]);
