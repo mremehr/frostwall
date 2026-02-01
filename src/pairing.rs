@@ -335,6 +335,7 @@ impl PairingHistory {
     }
 
     /// Begin undo window
+    #[allow(dead_code)]
     pub fn begin_undo(&mut self, previous: HashMap<String, PathBuf>, message: String, duration_secs: u64) {
         self.undo_state = Some(UndoState {
             previous_wallpapers: previous,

@@ -21,6 +21,7 @@ pub enum ColorHarmony {
 
 impl ColorHarmony {
     /// Get a display name for the harmony type
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             ColorHarmony::Analogous => "Analogous",

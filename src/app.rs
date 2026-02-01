@@ -3,6 +3,7 @@ use crate::screen::{self, Screen};
 use crate::swww::{self, FillColor, ResizeMode, Transition, TransitionType};
 use crate::thumbnail::ThumbnailCache;
 use crate::ui;
+use crate::utils::ColorHarmony;
 use crate::wallpaper::{MatchMode, SortMode, Wallpaper, WallpaperCache};
 use anyhow::Result;
 use crossterm::{
@@ -412,8 +413,8 @@ pub struct App {
     pub command_buffer: String,
     /// Show pairing preview popup
     pub show_pairing_preview: bool,
-    /// Pairing preview suggestions per screen (screen_name -> [(path, score)])
-    pub pairing_preview_matches: HashMap<String, Vec<(PathBuf, f32)>>,
+    /// Pairing preview suggestions per screen (screen_name -> [(path, score, harmony)])
+    pub pairing_preview_matches: HashMap<String, Vec<(PathBuf, f32, ColorHarmony)>>,
     /// Selected index in pairing preview (which alternative)
     pub pairing_preview_idx: usize,
 }
@@ -1137,9 +1138,16 @@ impl App {
             return;
         }
 
-        let (selected_path, selected_colors) = match self.selected_wallpaper() {
-            Some(wp) => (wp.path.clone(), wp.colors.clone()),
+        let (selected_path, selected_colors, selected_weights) = match self.selected_wallpaper() {
+            Some(wp) => (wp.path.clone(), wp.colors.clone(), wp.color_weights.clone()),
             None => return,
+        };
+
+        // Default weights if empty
+        let selected_weights = if selected_weights.is_empty() {
+            vec![1.0 / selected_colors.len().max(1) as f32; selected_colors.len()]
+        } else {
+            selected_weights
         };
 
         let match_mode = self.config.display.match_mode;
@@ -1163,8 +1171,34 @@ impl App {
                 5,
             );
 
-            if !top_matches.is_empty() {
-                self.pairing_preview_matches.insert(screen.name.clone(), top_matches);
+            // Calculate harmony for each match
+            let matches_with_harmony: Vec<(PathBuf, f32, ColorHarmony)> = top_matches
+                .into_iter()
+                .map(|(path, score)| {
+                    // Find the wallpaper to get its colors and weights
+                    let harmony = self.cache.wallpapers.iter()
+                        .find(|wp| wp.path == path)
+                        .map(|wp| {
+                            let wp_weights = if wp.color_weights.is_empty() {
+                                vec![1.0 / wp.colors.len().max(1) as f32; wp.colors.len()]
+                            } else {
+                                wp.color_weights.clone()
+                            };
+                            let (harmony, _strength) = crate::utils::detect_harmony(
+                                &selected_colors,
+                                &selected_weights,
+                                &wp.colors,
+                                &wp_weights,
+                            );
+                            harmony
+                        })
+                        .unwrap_or(ColorHarmony::None);
+                    (path, score, harmony)
+                })
+                .collect();
+
+            if !matches_with_harmony.is_empty() {
+                self.pairing_preview_matches.insert(screen.name.clone(), matches_with_harmony);
             }
         }
     }
@@ -1208,7 +1242,7 @@ impl App {
         // Then apply the preview selections to other screens
         for (screen_name, matches) in &self.pairing_preview_matches {
             let idx = self.pairing_preview_idx.min(matches.len().saturating_sub(1));
-            if let Some((wp_path, _)) = matches.get(idx) {
+            if let Some((wp_path, _, _)) = matches.get(idx) {
                 if let Err(e) = swww::set_wallpaper_with_resize(
                     screen_name,
                     wp_path,

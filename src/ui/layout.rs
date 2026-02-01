@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::ui::theme::{frost_theme, FrostTheme};
+use crate::utils::ColorHarmony;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -316,27 +317,27 @@ fn draw_pairing_panel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostThe
         return;
     }
 
-    // Collect preview data
-    let preview_data: Vec<(String, Option<usize>, String)> = app.pairing_preview_matches
+    // Collect preview data: (screen_name, cache_idx, filename, harmony)
+    let preview_data: Vec<(String, Option<usize>, String, ColorHarmony)> = app.pairing_preview_matches
         .iter()
         .map(|(screen_name, matches)| {
             let idx = preview_idx.min(matches.len().saturating_sub(1));
-            if let Some((path, _)) = matches.get(idx) {
+            if let Some((path, _, harmony)) = matches.get(idx) {
                 let cache_idx = app.cache.wallpapers.iter()
                     .position(|wp| &wp.path == path);
                 let filename = path.file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("?")
                     .to_string();
-                (screen_name.clone(), cache_idx, filename)
+                (screen_name.clone(), cache_idx, filename, *harmony)
             } else {
-                (screen_name.clone(), None, "?".to_string())
+                (screen_name.clone(), None, "?".to_string(), ColorHarmony::None)
             }
         })
         .collect();
 
     // Request all thumbnails
-    for (_, cache_idx, _) in &preview_data {
+    for (_, cache_idx, _, _) in &preview_data {
         if let Some(ci) = cache_idx {
             app.request_thumbnail(*ci);
         }
@@ -351,14 +352,26 @@ fn draw_pairing_panel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostThe
 
     let mut y_offset = inner.y;
 
-    for (screen_name, cache_idx, filename) in preview_data {
+    for (screen_name, cache_idx, filename, harmony) in preview_data {
         if y_offset + item_height > inner.y + inner.height {
             break;
         }
 
-        // Screen name header
-        let screen_short: String = screen_name.chars().take(inner.width as usize - 2).collect();
-        let header = Paragraph::new(screen_short)
+        // Screen name header with harmony indicator
+        let harmony_icon = match harmony {
+            ColorHarmony::Analogous => "~",        // Similar
+            ColorHarmony::Complementary => "◐",    // Opposite
+            ColorHarmony::Triadic => "△",          // Triangle
+            ColorHarmony::SplitComplementary => "⋈", // Split
+            ColorHarmony::None => "",
+        };
+        let screen_short: String = screen_name.chars().take(inner.width as usize - 4).collect();
+        let header_text = if harmony_icon.is_empty() {
+            screen_short
+        } else {
+            format!("{} {}", harmony_icon, screen_short)
+        };
+        let header = Paragraph::new(header_text)
             .style(Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center);
         f.render_widget(header, Rect::new(inner.x, y_offset, inner.width, 1));
