@@ -1154,13 +1154,13 @@ impl App {
                 .filter(|wp| wp.matches_screen_with_mode(screen, match_mode))
                 .collect();
 
-            // Get top 3 matches
+            // Get top 5 matches
             let top_matches = self.pairing_history.get_top_matches(
                 &selected_path,
                 &screen.name,
                 &matching,
                 &selected_colors,
-                3,
+                5,
             );
 
             if !top_matches.is_empty() {
