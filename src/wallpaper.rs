@@ -215,23 +215,10 @@ impl Wallpaper {
         self.colors = color_weight_pairs.iter().map(|(c, _)| c.clone()).collect();
         self.color_weights = color_weight_pairs.iter().map(|(_, w)| *w).collect();
 
-        // Generate auto-tags from colors
-        self.generate_auto_tags();
+        // Note: Auto-tags are now generated via CLIP (frostwall auto-tag command)
+        // and not automatically from color extraction
 
         Ok(())
-    }
-
-    /// Generate auto-tags based on color analysis
-    pub fn generate_auto_tags(&mut self) {
-        if self.colors.is_empty() {
-            return;
-        }
-
-        let tags = crate::utils::auto_tag_from_colors(&self.colors);
-        self.auto_tags = tags
-            .into_iter()
-            .map(|(name, confidence)| AutoTag { name, confidence })
-            .collect();
     }
 
     /// Full path with colors (legacy, slower)

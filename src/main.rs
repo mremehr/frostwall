@@ -1,5 +1,6 @@
 mod app;
 mod clip;
+mod clip_embeddings;
 mod collections;
 mod init;
 mod pairing;
@@ -102,16 +103,6 @@ enum Commands {
         /// Show detailed progress
         #[arg(short, long)]
         verbose: bool,
-    },
-    /// Auto-tag wallpapers using color analysis (no ML required)
-    ColorTag {
-        /// Only tag wallpapers missing auto-tags
-        #[arg(short, long)]
-        incremental: bool,
-
-        /// Minimum confidence threshold (0.0-1.0)
-        #[arg(short, long, default_value = "0.35")]
-        threshold: f32,
     },
     /// Manage wallpaper collections (saved presets)
     Collection {
@@ -343,9 +334,6 @@ async fn main() -> Result<()> {
         #[cfg(feature = "clip")]
         Some(Commands::AutoTag { incremental, threshold, verbose }) => {
             cmd_auto_tag(&wallpaper_dir, incremental, threshold, verbose).await?;
-        }
-        Some(Commands::ColorTag { incremental, threshold }) => {
-            cmd_color_tag(&wallpaper_dir, incremental, threshold)?;
         }
         Some(Commands::Collection { action }) => {
             cmd_collection(action).await?;
@@ -662,69 +650,6 @@ fn cmd_similar(wallpaper_dir: &Path, target_path: &Path, limit: usize) -> Result
     Ok(())
 }
 
-fn cmd_color_tag(wallpaper_dir: &Path, incremental: bool, threshold: f32) -> Result<()> {
-    println!("Loading wallpaper cache...");
-    let mut cache = wallpaper::WallpaperCache::load_or_scan(wallpaper_dir)?;
-
-    let to_process: Vec<usize> = cache
-        .wallpapers
-        .iter()
-        .enumerate()
-        .filter(|(_, wp)| !incremental || wp.auto_tags.is_empty())
-        .filter(|(_, wp)| !wp.colors.is_empty()) // Need colors for tagging
-        .map(|(i, _)| i)
-        .collect();
-
-    if to_process.is_empty() {
-        println!("All wallpapers already tagged (or no colors extracted).");
-        return Ok(());
-    }
-
-    println!("Auto-tagging {} wallpapers (threshold: {})...", to_process.len(), threshold);
-
-    let mut tag_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
-    for (progress, idx) in to_process.iter().enumerate() {
-        let wp = &mut cache.wallpapers[*idx];
-
-        // Generate tags using color analysis
-        let tags = crate::utils::auto_tag_from_colors(&wp.colors);
-        let filtered_tags: Vec<_> = tags
-            .into_iter()
-            .filter(|(_, conf)| *conf >= threshold)
-            .collect();
-
-        // Update counts
-        for (tag_name, _) in &filtered_tags {
-            *tag_counts.entry(tag_name.clone()).or_insert(0) += 1;
-        }
-
-        wp.auto_tags = filtered_tags
-            .into_iter()
-            .map(|(name, confidence)| clip::AutoTag { name, confidence })
-            .collect();
-
-        if (progress + 1) % 50 == 0 || progress + 1 == to_process.len() {
-            eprint!("\rProgress: {}/{}", progress + 1, to_process.len());
-        }
-    }
-
-    eprintln!(); // Newline after progress
-
-    cache.save()?;
-
-    // Show summary
-    println!("\nTag distribution:");
-    let mut sorted_tags: Vec<_> = tag_counts.into_iter().collect();
-    sorted_tags.sort_by(|a, b| b.1.cmp(&a.1));
-    for (tag, count) in sorted_tags {
-        println!("  {}: {}", tag, count);
-    }
-
-    println!("\nDone! Auto-tags saved to cache.");
-    Ok(())
-}
-
 #[cfg(feature = "clip")]
 async fn cmd_auto_tag(
     wallpaper_dir: &Path,
@@ -736,7 +661,7 @@ async fn cmd_auto_tag(
 
     println!("Initializing CLIP model...");
 
-    let tagger = ClipTagger::new().await?;
+    let mut tagger = ClipTagger::new().await?;
 
     let mut cache = wallpaper::WallpaperCache::load_or_scan(wallpaper_dir)?;
 

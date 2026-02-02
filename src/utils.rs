@@ -324,15 +324,6 @@ pub fn color_similarity(hex1: &str, hex2: &str) -> f32 {
     }
 }
 
-/// Find the best color match between two palettes using LAB distance
-/// Returns the average similarity of the best matches
-pub fn palette_similarity(colors1: &[String], colors2: &[String]) -> f32 {
-    // Use equal weights if none provided
-    let weights1: Vec<f32> = vec![1.0 / colors1.len() as f32; colors1.len()];
-    let weights2: Vec<f32> = vec![1.0 / colors2.len() as f32; colors2.len()];
-    palette_similarity_weighted(colors1, &weights1, colors2, &weights2)
-}
-
 /// Find the best color match between two palettes, weighted by color dominance
 /// Each color's contribution is scaled by its weight (proportion of the image)
 /// Returns a weighted similarity score (0.0-1.0)
@@ -391,90 +382,6 @@ pub fn palette_similarity_weighted(
 
     total_similarity
 }
-
-/// Auto-tag definitions based on color characteristics
-pub struct TagDefinition {
-    pub name: &'static str,
-    pub colors: &'static [&'static str],  // Reference colors
-    pub brightness_range: (f32, f32),      // (min, max) 0.0-1.0
-    pub saturation_range: (f32, f32),      // (min, max) 0.0-1.0
-}
-
-/// Predefined tag definitions
-pub const AUTO_TAG_DEFINITIONS: &[TagDefinition] = &[
-    TagDefinition {
-        name: "nature",
-        colors: &["#228b22", "#006400", "#90ee90", "#2e8b57", "#32cd32"],
-        brightness_range: (0.2, 0.8),
-        saturation_range: (0.3, 1.0),
-    },
-    TagDefinition {
-        name: "ocean",
-        colors: &["#0077be", "#00bfff", "#1e90ff", "#4169e1", "#000080"],
-        brightness_range: (0.3, 0.9),
-        saturation_range: (0.4, 1.0),
-    },
-    TagDefinition {
-        name: "forest",
-        colors: &["#228b22", "#013220", "#355e3b", "#2e8b57", "#006400"],
-        brightness_range: (0.1, 0.5),
-        saturation_range: (0.3, 0.8),
-    },
-    TagDefinition {
-        name: "sunset",
-        colors: &["#ff6347", "#ff7f50", "#ffa500", "#ff4500", "#ff8c00"],
-        brightness_range: (0.4, 0.9),
-        saturation_range: (0.5, 1.0),
-    },
-    TagDefinition {
-        name: "dark",
-        colors: &["#000000", "#1a1a2e", "#16213e", "#0f0f0f", "#2d2d2d"],
-        brightness_range: (0.0, 0.3),
-        saturation_range: (0.0, 0.5),
-    },
-    TagDefinition {
-        name: "bright",
-        colors: &["#ffffff", "#f0f0f0", "#fffacd", "#ffffe0", "#f5f5f5"],
-        brightness_range: (0.75, 1.0),
-        saturation_range: (0.0, 0.3),
-    },
-    TagDefinition {
-        name: "cyberpunk",
-        colors: &["#ff00ff", "#00ffff", "#ff1493", "#9400d3", "#7b68ee"],
-        brightness_range: (0.2, 0.7),
-        saturation_range: (0.7, 1.0),
-    },
-    TagDefinition {
-        name: "minimal",
-        colors: &["#ffffff", "#f5f5f5", "#e0e0e0", "#fafafa", "#d3d3d3"],
-        brightness_range: (0.8, 1.0),
-        saturation_range: (0.0, 0.15),
-    },
-    TagDefinition {
-        name: "mountain",
-        colors: &["#708090", "#778899", "#b0c4de", "#87ceeb", "#4682b4"],
-        brightness_range: (0.3, 0.8),
-        saturation_range: (0.1, 0.5),
-    },
-    TagDefinition {
-        name: "space",
-        colors: &["#000000", "#191970", "#0d0d0d", "#1a1a2e", "#2e0854"],
-        brightness_range: (0.0, 0.25),
-        saturation_range: (0.0, 0.6),
-    },
-    TagDefinition {
-        name: "autumn",
-        colors: &["#d2691e", "#8b4513", "#cd853f", "#daa520", "#b8860b"],
-        brightness_range: (0.3, 0.7),
-        saturation_range: (0.4, 0.9),
-    },
-    TagDefinition {
-        name: "pastel",
-        colors: &["#ffb6c1", "#dda0dd", "#b0e0e6", "#98fb98", "#fafad2"],
-        brightness_range: (0.7, 0.95),
-        saturation_range: (0.2, 0.5),
-    },
-];
 
 /// Calculate brightness of a hex color (0.0-1.0)
 pub fn color_brightness(hex: &str) -> f32 {
@@ -580,52 +487,6 @@ pub fn find_similar_wallpapers(
     similarities.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     similarities.into_iter().take(limit).collect()
-}
-
-/// Auto-tag a wallpaper based on its color palette
-/// Returns Vec<(tag_name, confidence)> sorted by confidence
-pub fn auto_tag_from_colors(colors: &[String]) -> Vec<(String, f32)> {
-    if colors.is_empty() {
-        return Vec::new();
-    }
-
-    // Calculate average brightness and saturation
-    let avg_brightness: f32 = colors.iter()
-        .map(|c| color_brightness(c))
-        .sum::<f32>() / colors.len() as f32;
-
-    let avg_saturation: f32 = colors.iter()
-        .map(|c| color_saturation(c))
-        .sum::<f32>() / colors.len() as f32;
-
-    let mut tags = Vec::new();
-
-    for def in AUTO_TAG_DEFINITIONS {
-        let mut score = 0.0f32;
-
-        // Check brightness match (0-0.3 points)
-        if avg_brightness >= def.brightness_range.0 && avg_brightness <= def.brightness_range.1 {
-            score += 0.3;
-        }
-
-        // Check saturation match (0-0.2 points)
-        if avg_saturation >= def.saturation_range.0 && avg_saturation <= def.saturation_range.1 {
-            score += 0.2;
-        }
-
-        // Check color similarity (0-0.5 points)
-        let def_colors: Vec<String> = def.colors.iter().map(|s| s.to_string()).collect();
-        let color_match = palette_similarity(colors, &def_colors);
-        score += color_match * 0.5;
-
-        if score >= 0.35 {
-            tags.push((def.name.to_string(), score));
-        }
-    }
-
-    // Sort by confidence descending
-    tags.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    tags
 }
 
 /// Check if a path is a supported image file
