@@ -148,15 +148,15 @@ pub fn detect_harmony(
             let (harmony, strength) = if diff < 30.0 {
                 // Analogous: similar hues
                 (ColorHarmony::Analogous, 1.0 - diff / 30.0)
-            } else if diff >= 165.0 && diff <= 195.0 {
+            } else if (165.0..=195.0).contains(&diff) {
                 // Complementary: opposite hues
                 let center_diff = (diff - 180.0).abs();
                 (ColorHarmony::Complementary, 1.0 - center_diff / 15.0)
-            } else if diff >= 105.0 && diff <= 135.0 {
+            } else if (105.0..=135.0).contains(&diff) {
                 // Triadic: 120° apart
                 let center_diff = (diff - 120.0).abs();
                 (ColorHarmony::Triadic, 1.0 - center_diff / 15.0)
-            } else if diff >= 135.0 && diff < 165.0 {
+            } else if (135.0..165.0).contains(&diff) {
                 // Split-complementary
                 let center_diff = (diff - 150.0).abs();
                 (ColorHarmony::SplitComplementary, 1.0 - center_diff / 15.0)
@@ -189,10 +189,12 @@ pub fn delta_e(lab1: &Lab, lab2: &Lab) -> f32 {
 }
 
 /// Calculate Delta E 2000 (CIEDE2000) - perceptually uniform color difference
+///
 /// This is more accurate than CIE76, especially for:
 /// - Dark colors
 /// - Saturated colors
 /// - Neutral/gray colors
+///
 /// Reference: https://en.wikipedia.org/wiki/Color_difference#CIEDE2000
 pub fn delta_e_2000(lab1: &Lab, lab2: &Lab) -> f32 {
     use std::f32::consts::PI;

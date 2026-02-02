@@ -346,7 +346,7 @@ fn draw_pairing_panel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostThe
     // Calculate layout - vertical stack of thumbnails
     let num_items = preview_data.len();
     let available_height = inner.height.saturating_sub(1);
-    let item_height = (available_height / num_items as u16).min(18).max(8);
+    let item_height = (available_height / num_items as u16).clamp(8, 18);
     let thumb_h = item_height.saturating_sub(2);
     let thumb_w = (inner.width - 2).min(thumb_h * 2); // Maintain rough aspect ratio
 

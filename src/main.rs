@@ -96,9 +96,13 @@ enum Commands {
         #[arg(short, long)]
         incremental: bool,
 
-        /// Confidence threshold (0.0-1.0)
-        #[arg(short, long, default_value = "0.25")]
+        /// Confidence threshold (0.0-1.0, default 0.55)
+        #[arg(short, long, default_value = "0.55")]
         threshold: f32,
+
+        /// Maximum number of tags per image (0 = unlimited)
+        #[arg(short = 'n', long, default_value = "5")]
+        max_tags: usize,
 
         /// Show detailed progress
         #[arg(short, long)]
@@ -332,8 +336,8 @@ async fn main() -> Result<()> {
             cmd_pair(action, &wallpaper_dir)?;
         }
         #[cfg(feature = "clip")]
-        Some(Commands::AutoTag { incremental, threshold, verbose }) => {
-            cmd_auto_tag(&wallpaper_dir, incremental, threshold, verbose).await?;
+        Some(Commands::AutoTag { incremental, threshold, max_tags, verbose }) => {
+            cmd_auto_tag(&wallpaper_dir, incremental, threshold, max_tags, verbose).await?;
         }
         Some(Commands::Collection { action }) => {
             cmd_collection(action).await?;
@@ -655,6 +659,7 @@ async fn cmd_auto_tag(
     wallpaper_dir: &Path,
     incremental: bool,
     threshold: f32,
+    max_tags: usize,
     verbose: bool,
 ) -> Result<()> {
     use clip::ClipTagger;
@@ -684,8 +689,20 @@ async fn cmd_auto_tag(
         let wp = &cache.wallpapers[*idx];
         let path = wp.path.clone();
 
-        match tagger.tag_image(&path, threshold) {
-            Ok(tags) => {
+        // Show verbose debug output only for first image
+        let show_debug = verbose && progress == 0;
+        if show_debug {
+            eprintln!("\n=== Debug output for first image ===");
+            eprintln!("Image: {}", path.display());
+        }
+
+        match tagger.tag_image_verbose(&path, threshold, show_debug) {
+            Ok(mut tags) => {
+                // Limit to max_tags (tags are already sorted by confidence)
+                if max_tags > 0 && tags.len() > max_tags {
+                    tags.truncate(max_tags);
+                }
+
                 if verbose {
                     let tag_names: Vec<_> = tags.iter().map(|t| &t.name).collect();
                     println!(

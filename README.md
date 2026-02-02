@@ -89,8 +89,11 @@ Tags are assigned based on:
 Semantic image understanding using OpenAI's CLIP model:
 
 ```bash
-# Build with CLIP support
+# Build with CLIP support (CPU)
 cargo build --release --features clip
+
+# Build with CLIP + CUDA GPU acceleration
+cargo build --release --features clip-cuda
 
 # Tag wallpapers with AI
 frostwall auto-tag                    # Tag all wallpapers
@@ -287,8 +290,11 @@ Control how wallpapers fit the screen:
 cd FrostWall
 cargo build --release
 
-# With CLIP AI tagging support (optional)
+# With CLIP AI tagging support (CPU)
 cargo build --release --features clip
+
+# With CLIP + CUDA GPU acceleration (requires NVIDIA GPU + CUDA)
+cargo build --release --features clip-cuda
 ```
 
 Binary: `target/release/frostwall`
@@ -500,6 +506,7 @@ Each wallpaper stores metadata including colors, tags, and optional CLIP embeddi
   - 26 semantic categories: abstract, anime, architecture, city, fantasy, retro, tropical, and more
   - Pre-computed text embeddings for fast inference
   - Auto-downloads model from HuggingFace on first use
+  - **CUDA GPU acceleration** - Optional `--features clip-cuda` for 10-50x faster tagging
 - **Visual pairing preview** - Split-view with real thumbnails for multi-monitor pairing
 - **Manual pairing control** - Press `p` to preview and select matching wallpapers
 - **Improved pairing** - More options for pairing, better color matching

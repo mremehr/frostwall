@@ -156,9 +156,9 @@ impl Wallpaper {
         }
 
         const K: usize = 5;
-        const CONVERGENCE_THRESHOLD: f32 = 2.0;
-        const MAX_ITERATIONS: u32 = 100;
-        const THUMBNAIL_SIZE: u32 = 256;
+        const CONVERGENCE_THRESHOLD: f32 = 5.0;  // Looser convergence (was 2.0)
+        const MAX_ITERATIONS: u32 = 30;          // Faster (was 100)
+        const THUMBNAIL_SIZE: u32 = 128;         // Smaller (was 256)
 
         let img = image::open(&self.path).context("Failed to open image")?;
         let thumb = img.resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, FilterType::Triangle);
@@ -187,7 +187,7 @@ impl Wallpaper {
 
         // Calculate color weights (proportion of image each color represents)
         let total_pixels = lab.len() as f32;
-        let mut counts = vec![0usize; K];
+        let mut counts = [0usize; K];
         for &idx in &result.indices {
             counts[idx as usize] += 1;
         }
@@ -470,21 +470,22 @@ impl WallpaperCache {
 
         eprintln!(" done!");
 
-        // Phase 2: Parallel color extraction (full decode)
-        let color_processed = AtomicUsize::new(0);
+        // Phase 2: Batched parallel color extraction (10 at a time)
         let color_total = wallpapers.len();
-        eprint!("Phase 2/2: Extracting colors...");
+        const BATCH_SIZE: usize = 10;
 
-        wallpapers.par_iter_mut().for_each(|wp| {
-            let count = color_processed.fetch_add(1, Ordering::Relaxed) + 1;
-            if count.is_multiple_of(10) || count == color_total {
-                eprint!("\rPhase 2/2: Extracting colors... {}/{}", count, color_total);
-            }
+        for (batch_idx, chunk) in wallpapers.chunks_mut(BATCH_SIZE).enumerate() {
+            let batch_start = batch_idx * BATCH_SIZE;
 
-            if let Err(e) = wp.extract_colors() {
-                eprintln!("\nWarning: Failed to extract colors for {}: {}", wp.path.display(), e);
-            }
-        });
+            chunk.par_iter_mut().for_each(|wp| {
+                if let Err(e) = wp.extract_colors() {
+                    eprintln!("\nWarning: Failed to extract colors for {}: {}", wp.path.display(), e);
+                }
+            });
+
+            let progress = (batch_start + chunk.len()).min(color_total);
+            eprint!("\rPhase 2/2: Extracting colors... {}/{}", progress, color_total);
+        }
 
         eprintln!(" done!");
 

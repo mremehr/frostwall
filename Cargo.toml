@@ -73,6 +73,7 @@ futures-util = { version = "0.3", optional = true }
 [features]
 default = []
 clip = ["dep:ort", "dep:ndarray", "dep:indicatif", "dep:futures-util"]
+clip-cuda = ["clip", "ort/cuda"]
 
 [profile.release]
 lto = true

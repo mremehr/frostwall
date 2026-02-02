@@ -35,9 +35,10 @@ pub struct AutoTag {
 }
 
 /// Model URLs from HuggingFace
+/// Using Qdrant's model which outputs proper 512-dim projected embeddings
 #[cfg(feature = "clip")]
 const VISUAL_MODEL_URL: &str =
-    "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model.onnx";
+    "https://huggingface.co/Qdrant/clip-ViT-B-32-vision/resolve/main/model.onnx";
 
 /// Model cache directory manager
 #[cfg(feature = "clip")]
@@ -125,6 +126,29 @@ impl ClipTagger {
 
         eprintln!("Loading CLIP visual model...");
 
+        // Try CUDA first, fall back to CPU
+        #[cfg(feature = "clip-cuda")]
+        let visual_session = {
+            use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
+
+            let cuda_available = CUDAExecutionProvider::default().is_available()?;
+
+            if cuda_available {
+                eprintln!("Using CUDA GPU acceleration");
+                Session::builder()?
+                    .with_execution_providers([CUDAExecutionProvider::default().build()])?
+                    .commit_from_file(&visual_path)
+                    .context("Failed to load visual model with CUDA")?
+            } else {
+                eprintln!("CUDA not available, using CPU");
+                Session::builder()?
+                    .with_intra_threads(4)?
+                    .commit_from_file(&visual_path)
+                    .context("Failed to load visual model")?
+            }
+        };
+
+        #[cfg(not(feature = "clip-cuda"))]
         let visual_session = Session::builder()?
             .with_intra_threads(4)?
             .commit_from_file(&visual_path)
@@ -139,6 +163,11 @@ impl ClipTagger {
     ///
     /// Returns tags sorted by confidence (highest first)
     pub fn tag_image(&mut self, image_path: &Path, threshold: f32) -> Result<Vec<AutoTag>> {
+        self.tag_image_verbose(image_path, threshold, false)
+    }
+
+    /// Tag with optional verbose output for debugging
+    pub fn tag_image_verbose(&mut self, image_path: &Path, threshold: f32, verbose: bool) -> Result<Vec<AutoTag>> {
         // 1. Preprocess image to CLIP format
         let input = preprocess_image(image_path)?;
 
@@ -163,25 +192,45 @@ impl ClipTagger {
         let shape: Vec<usize> = tensor_ref.0.iter().map(|&x| x as usize).collect();
         let embedding_data: &[f32] = tensor_ref.1;
 
+        if verbose {
+            eprintln!("  Output shape: {:?}", shape);
+            eprintln!("  Output data length: {}", embedding_data.len());
+        }
+
         // Get the [CLS] token embedding (first token) or pooled output
         let embedding: Vec<f32> = if shape.len() == 3 {
             // Shape: [batch, seq_len, hidden_dim] - take first token (CLS)
             let hidden_dim = shape[2];
+            if verbose {
+                eprintln!("  3D tensor, taking first {} values (CLS token)", hidden_dim);
+            }
             embedding_data[..hidden_dim].to_vec()
         } else if shape.len() == 2 {
             // Shape: [batch, hidden_dim]
             let hidden_dim = shape[1];
+            if verbose {
+                eprintln!("  2D tensor, taking {} values", hidden_dim);
+            }
             embedding_data[..hidden_dim].to_vec()
         } else {
+            if verbose {
+                eprintln!("  Using all {} values", embedding_data.len());
+            }
             embedding_data.to_vec()
         };
+
+        if verbose {
+            eprintln!("  Embedding dimension: {}", embedding.len());
+            eprintln!("  Expected dimension: {}", EMBEDDING_DIM);
+            eprintln!("  First 5 values: {:?}", &embedding[..5.min(embedding.len())]);
+        }
 
         // 4. Project to CLIP embedding space if needed (512 dim)
         let projected = if embedding.len() != EMBEDDING_DIM {
             // The raw hidden state is 768 dim, but we compare against 512-dim text embeddings
             // For now, truncate or warn - ideally we'd have the projection layer
             eprintln!(
-                "Warning: embedding dim {} != expected {}, using raw similarity",
+                "WARNING: embedding dim {} != expected {}! Model may be incompatible.",
                 embedding.len(),
                 EMBEDDING_DIM
             );
@@ -200,6 +249,8 @@ impl ClipTagger {
 
         // 6. Compute cosine similarity with each category embedding
         let mut tags = Vec::new();
+        let mut all_scores: Vec<(&str, f32, f32)> = Vec::new();
+
         for (name, cat_embedding) in CATEGORY_EMBEDDINGS {
             let similarity: f32 = if normalized.len() == cat_embedding.len() {
                 normalized
@@ -215,12 +266,24 @@ impl ClipTagger {
             // CLIP similarities are typically in range [-1, 1], normalize to [0, 1]
             let confidence = (similarity + 1.0) / 2.0;
 
+            all_scores.push((name, similarity, confidence));
+
             if confidence >= threshold {
                 tags.push(AutoTag {
                     name: name.to_string(),
                     confidence,
                 });
             }
+        }
+
+        if verbose {
+            eprintln!("  Raw similarities (top 5):");
+            let mut sorted_scores = all_scores.clone();
+            sorted_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (name, sim, conf) in sorted_scores.iter().take(5) {
+                eprintln!("    {}: raw={:.4}, conf={:.4}", name, sim, conf);
+            }
+            eprintln!("  Tags above threshold {}: {}", threshold, tags.len());
         }
 
         // Sort by confidence descending
@@ -239,16 +302,48 @@ impl ClipTagger {
     }
 }
 
+/// Get cached thumbnail path if it exists
+#[cfg(feature = "clip")]
+fn get_cached_thumbnail(source_path: &Path) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let cache_dir = directories::ProjectDirs::from("com", "mrmattias", "frostwall")
+        .map(|dirs| dirs.cache_dir().join("thumbs_v2"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/frostwall/thumbs_v2"));
+
+    let mut hasher = DefaultHasher::new();
+    source_path.to_string_lossy().hash(&mut hasher);
+    if let Ok(metadata) = std::fs::metadata(source_path) {
+        if let Ok(modified) = metadata.modified() {
+            modified.hash(&mut hasher);
+        }
+    }
+    let hash = hasher.finish();
+    let thumb_path = cache_dir.join(format!("{:016x}.jpg", hash));
+
+    if thumb_path.exists() {
+        Some(thumb_path)
+    } else {
+        None
+    }
+}
+
 /// Preprocess image for CLIP: resize to 224x224, normalize with CLIP constants
 #[cfg(feature = "clip")]
 fn preprocess_image(path: &Path) -> Result<Array4<f32>> {
-    let img = image::open(path).context("Failed to open image")?;
+    // Try to use cached thumbnail first (800x600 vs 4K original = much faster)
+    let img = if let Some(thumb_path) = get_cached_thumbnail(path) {
+        image::open(&thumb_path).unwrap_or_else(|_| image::open(path).unwrap())
+    } else {
+        image::open(path).context("Failed to open image")?
+    };
 
-    // Resize to CLIP input size with high quality
+    // Resize to CLIP input size (Triangle is fast and good enough for 224x224)
     let img = img.resize_exact(
         CLIP_IMAGE_SIZE,
         CLIP_IMAGE_SIZE,
-        image::imageops::FilterType::Lanczos3,
+        image::imageops::FilterType::Triangle,
     );
     let rgb = img.to_rgb8();
 
