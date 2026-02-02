@@ -65,6 +65,10 @@ Multi-monitor wallpaper pairing that learns from your choices:
 
 ### Auto-Tagging
 
+Two tagging systems available:
+
+#### Color-Based Tagging (built-in)
+
 Automatic content detection based on color analysis:
 
 ```bash
@@ -79,6 +83,30 @@ Tags are assigned based on:
 - Brightness range matching
 - Saturation range matching
 - Color palette similarity (LAB/Delta-E)
+
+#### CLIP AI Tagging (optional feature)
+
+Semantic image understanding using OpenAI's CLIP model:
+
+```bash
+# Build with CLIP support
+cargo build --release --features clip
+
+# Tag wallpapers with AI
+frostwall auto-tag                    # Tag all wallpapers
+frostwall auto-tag --incremental      # Only tag new wallpapers
+frostwall auto-tag --threshold 0.6    # Custom confidence threshold
+frostwall auto-tag --verbose          # Show per-image results
+```
+
+26 semantic categories detected by CLIP:
+`abstract`, `anime`, `architecture`, `bright`, `city`, `cozy`, `cyberpunk`, `dark`, `desert`, `fantasy`, `forest`, `geometric`, `landscape_orientation`, `minimal`, `mountain`, `nature`, `ocean`, `pastel`, `portrait`, `retro`, `space`, `sunset`, `tropical`, `urban`, `vibrant`, `vintage`
+
+Features:
+- Uses CLIP ViT-B/32 visual encoder via ONNX Runtime
+- Pre-computed text embeddings for fast inference
+- Auto-downloads model from HuggingFace (~350MB, cached locally)
+- Understands image content semantically, not just colors
 
 ### Time-Based Profiles
 
@@ -183,6 +211,7 @@ frostwall tag list
 frostwall tag add ~/wallpapers/forest.jpg nature
 frostwall tag show nature
 frostwall color-tag                    # Auto-tag by colors
+frostwall auto-tag                     # AI tagging (requires --features clip)
 
 # Pairing management
 frostwall pair stats
@@ -257,6 +286,9 @@ Control how wallpapers fit the screen:
 ```bash
 cd FrostWall
 cargo build --release
+
+# With CLIP AI tagging support (optional)
+cargo build --release --features clip
 ```
 
 Binary: `target/release/frostwall`
@@ -372,6 +404,7 @@ src/
   watch.rs       # Watch daemon with inotify
   init.rs        # Interactive setup wizard
   clip.rs        # CLIP auto-tagging (optional feature)
+  clip_embeddings.rs  # Pre-computed CLIP text embeddings
   ui/
     mod.rs       # UI module exports
     theme.rs     # Frost theme (light/dark auto-detection)
@@ -435,9 +468,9 @@ frostwall random
 0 * * * * frostwall time-profile apply
 ```
 
-## Color Data Format
+## Wallpaper Data Format
 
-Each wallpaper stores metadata including colors and auto-tags:
+Each wallpaper stores metadata including colors, tags, and optional CLIP embeddings:
 
 ```json
 {
@@ -446,12 +479,16 @@ Each wallpaper stores metadata including colors and auto-tags:
   "height": 2160,
   "aspect_category": "Landscape",
   "colors": ["#1a2b3c", "#4d5e6f", "#7a8b9c", "#adbccd", "#d0e1f2"],
+  "color_weights": [0.35, 0.25, 0.20, 0.12, 0.08],
   "tags": ["nature", "forest"],
   "auto_tags": [
     {"name": "forest", "confidence": 0.85},
     {"name": "nature", "confidence": 0.72},
     {"name": "dark", "confidence": 0.45}
-  ]
+  ],
+  "embedding": [0.023, -0.041, ...],
+  "file_size": 2458624,
+  "modified_at": 1706889600
 }
 ```
 
@@ -459,9 +496,13 @@ Each wallpaper stores metadata including colors and auto-tags:
 
 ### v0.5.0
 
+- **CLIP AI auto-tagging** - Semantic image tagging using CLIP ViT-B/32 (optional `--features clip`)
+  - 26 semantic categories: abstract, anime, architecture, city, fantasy, retro, tropical, and more
+  - Pre-computed text embeddings for fast inference
+  - Auto-downloads model from HuggingFace on first use
 - **Visual pairing preview** - Split-view with real thumbnails for multi-monitor pairing
 - **Manual pairing control** - Press `p` to preview and select matching wallpapers
-- **Removed auto-apply** - Pairing is now intentional, not automatic
+- **Improved pairing** - More options for pairing, better color matching
 - **Cleaner UX** - 65/35 split layout shows your selection alongside suggestions
 
 ### v0.4.0
