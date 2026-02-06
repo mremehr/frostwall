@@ -42,6 +42,8 @@ pub struct Config {
     pub pairing: PairingConfig,
     #[serde(default)]
     pub time_profiles: crate::timeprofile::TimeProfiles,
+    #[serde(default)]
+    pub terminal: TerminalConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,12 +76,49 @@ pub struct ThumbnailConfig {
     pub height: u32,
     pub quality: u8,
     pub grid_columns: usize,
+    #[serde(default = "default_preload_count")]
+    pub preload_count: usize,
+}
+
+fn default_preload_count() -> usize {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeConfig {
     pub mode: String, // "auto", "light", "dark"
     pub check_interval_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalConfig {
+    /// Recommended repaint_delay for kitty.conf (ms)
+    #[serde(default = "default_repaint_delay")]
+    pub recommended_repaint_delay: u32,
+    /// Recommended input_delay for kitty.conf (ms)
+    #[serde(default = "default_input_delay")]
+    pub recommended_input_delay: u32,
+    /// Whether the optimization hint has been shown
+    #[serde(default)]
+    pub hint_shown: bool,
+}
+
+fn default_repaint_delay() -> u32 {
+    5
+}
+
+fn default_input_delay() -> u32 {
+    1
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            recommended_repaint_delay: 5,
+            recommended_input_delay: 1,
+            hint_shown: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +204,7 @@ impl Default for ThumbnailConfig {
             height: 600,
             quality: 92,
             grid_columns: 3,
+            preload_count: 3,
         }
     }
 }
@@ -304,6 +344,33 @@ impl Config {
         Ok(())
     }
 
+    /// Check if running in Kitty terminal
+    pub fn is_kitty_terminal() -> bool {
+        std::env::var("TERM").map(|t| t.contains("kitty")).unwrap_or(false)
+            || std::env::var("KITTY_WINDOW_ID").is_ok()
+    }
+
+    /// Show terminal optimization hint if not shown before
+    /// Returns the hint message if it should be shown
+    pub fn check_terminal_hint(&mut self) -> Option<String> {
+        if self.terminal.hint_shown || !Self::is_kitty_terminal() {
+            return None;
+        }
+
+        self.terminal.hint_shown = true;
+        let _ = self.save(); // Save that hint was shown
+
+        Some(format!(
+            "Tip: För optimal prestanda i Kitty, lägg till i ~/.config/kitty/kitty.conf:\n\n\
+             repaint_delay {}\n\
+             input_delay {}\n\
+             sync_to_monitor yes\n\n\
+             Tryck valfri tangent för att fortsätta...",
+            self.terminal.recommended_repaint_delay,
+            self.terminal.recommended_input_delay
+        ))
+    }
+
     pub fn transition(&self) -> Transition {
         let transition_type = match self.transition.transition_type.as_str() {
             "fade" => TransitionType::Fade,
@@ -361,7 +428,7 @@ pub enum AppEvent {
 
 /// Maximum number of thumbnails to keep in memory
 /// Kitty graphics protocol can get confused with too many images
-const MAX_THUMBNAIL_CACHE: usize = 12;
+const MAX_THUMBNAIL_CACHE: usize = 20;
 
 pub struct App {
     pub screens: Vec<Screen>,
@@ -1276,13 +1343,23 @@ impl App {
 }
 
 pub async fn run_tui(wallpaper_dir: PathBuf) -> Result<()> {
+    let mut app = App::new(wallpaper_dir)?;
+
+    // Show terminal optimization hint if first run in Kitty
+    if let Some(hint) = app.config.check_terminal_hint() {
+        println!("\n{}\n", hint);
+        // Wait for keypress
+        enable_raw_mode()?;
+        let _ = event::read();
+        disable_raw_mode()?;
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(wallpaper_dir)?;
     app.init_screens().await?;
 
     // Set up channels for background thumbnail loading
@@ -1371,6 +1448,7 @@ fn run_app<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let mut last_theme_check = std::time::Instant::now();
     let mut current_theme_is_light = crate::ui::theme::is_light_theme();
+    let mut needs_redraw = true;
 
     loop {
         // Check for theme change every 500ms and force full redraw
@@ -1379,14 +1457,31 @@ fn run_app<B: ratatui::backend::Backend>(
             if new_is_light != current_theme_is_light {
                 current_theme_is_light = new_is_light;
                 terminal.clear()?;  // Force full terminal redraw
+                needs_redraw = true;
             }
             last_theme_check = std::time::Instant::now();
         }
 
-        terminal.draw(|f| ui::draw(f, app))?;
+        // Only redraw when needed (event received or state changed)
+        if needs_redraw {
+            terminal.draw(|f| ui::draw(f, app))?;
+            needs_redraw = false;
+        }
 
-        // Process all pending events
-        while let Ok(event) = event_rx.try_recv() {
+        // Block until event arrives (with timeout for theme checks)
+        let events: Vec<AppEvent> = match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(event) => {
+                needs_redraw = true;
+                let mut events = vec![event];
+                while let Ok(e) = event_rx.try_recv() {
+                    events.push(e);
+                }
+                events
+            }
+            Err(_) => continue, // Timeout, check theme and loop
+        };
+
+        for event in events {
             match event {
                 AppEvent::Key(key) => {
                     if key.kind != KeyEventKind::Press {

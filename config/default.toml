@@ -43,8 +43,11 @@ height = 600
 # JPEG quality (0-100)
 quality = 92
 
-# Visible thumbnails in TUI grid
+# Visible thumbnails in carousel
 grid_columns = 3
+
+# Extra thumbnails to preload ahead/behind for smooth scrolling
+preload_count = 3
 
 [theme]
 # Theme mode: "auto", "light", "dark"
@@ -66,3 +69,10 @@ quit = "q"
 random = "r"
 toggle_match = "m"
 toggle_resize = "f"
+
+[terminal]
+# Recommended Kitty settings for optimal image rendering
+recommended_repaint_delay = 5
+recommended_input_delay = 1
+# Set to true after showing optimization hint
+hint_shown = false

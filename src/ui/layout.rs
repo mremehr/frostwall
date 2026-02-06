@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 use ratatui_image::StatefulImage;
@@ -486,13 +486,14 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
     // Center vertically
     let thumb_y = area.y + (area.height.saturating_sub(THUMBNAIL_HEIGHT + 2)) / 2;
 
-    // Collect cache indices that need loading
-    let indices_to_load: Vec<usize> = (start..end)
-        .map(|idx| app.filtered_wallpapers[idx])
-        .collect();
+    // Preload extra thumbnails ahead/behind for smooth scrolling
+    let preload = app.config.thumbnails.preload_count;
+    let preload_start = start.saturating_sub(preload);
+    let preload_end = (end + preload).min(total);
 
-    // Request thumbnails for visible items (non-blocking)
-    for &cache_idx in &indices_to_load {
+    // Request thumbnails for visible + preload range (non-blocking)
+    for idx in preload_start..preload_end {
+        let cache_idx = app.filtered_wallpapers[idx];
         app.request_thumbnail(cache_idx);
     }
 
@@ -541,6 +542,9 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
         } else {
             Style::default().fg(border_color)
         };
+
+        // Clear previous image artifacts (Kitty protocol caches images)
+        f.render_widget(Clear, thumb_area);
 
         let block = Block::default()
             .borders(Borders::ALL)
