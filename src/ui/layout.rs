@@ -161,9 +161,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
         "No screens".to_string()
     };
 
+    let clamped = app.selection.wallpaper_idx.min(
+        app.selection.filtered_wallpapers.len().saturating_sub(1),
+    );
     let count_info = format!(
         "{}/{}",
-        app.selection.wallpaper_idx + 1,
+        clamped + 1,
         app.selection.filtered_wallpapers.len()
     );
 
@@ -254,7 +257,10 @@ fn draw_carousel_single(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostT
         return;
     }
 
-    let cache_idx = app.selection.filtered_wallpapers[app.selection.wallpaper_idx];
+    let wallpaper_idx = app.selection.wallpaper_idx.min(
+        app.selection.filtered_wallpapers.len().saturating_sub(1),
+    );
+    let cache_idx = app.selection.filtered_wallpapers[wallpaper_idx];
 
     // Get wallpaper info
     let filename = app
@@ -541,12 +547,15 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
     let visible = grid_columns.min(total);
     let half = visible / 2;
 
-    let start = if app.selection.wallpaper_idx <= half {
+    // Clamp wallpaper_idx to valid range (defensive against stale index)
+    let clamped_idx = app.selection.wallpaper_idx.min(total.saturating_sub(1));
+
+    let start = if clamped_idx <= half {
         0
-    } else if app.selection.wallpaper_idx >= total.saturating_sub(half + 1) {
+    } else if clamped_idx >= total.saturating_sub(half + 1) {
         total.saturating_sub(visible)
     } else {
-        app.selection.wallpaper_idx - half
+        clamped_idx - half
     };
 
     let end = (start + visible).min(total);
@@ -572,7 +581,7 @@ fn draw_thumbnails(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostTheme)
 
     for (i, idx) in (start..end).enumerate() {
         let cache_idx = app.selection.filtered_wallpapers[idx];
-        let is_selected = idx == app.selection.wallpaper_idx;
+        let is_selected = idx == clamped_idx;
 
         // Get wallpaper info before mutable borrow
         let (filename, is_suggestion) = app

@@ -689,8 +689,10 @@ impl App {
         // Apply current sort
         self.apply_sort();
 
-        if self.selection.wallpaper_idx >= self.selection.filtered_wallpapers.len() {
+        if self.selection.filtered_wallpapers.is_empty() {
             self.selection.wallpaper_idx = 0;
+        } else if self.selection.wallpaper_idx >= self.selection.filtered_wallpapers.len() {
+            self.selection.wallpaper_idx = self.selection.filtered_wallpapers.len() - 1;
         }
 
         // Clear thumbnail cache when filter changes
@@ -884,6 +886,11 @@ impl App {
     /// Handle a loaded thumbnail from background thread
     pub fn handle_thumbnail_ready(&mut self, response: ThumbnailResponse) {
         self.thumbnails.loading.remove(&response.cache_idx);
+
+        // Ignore stale responses for indices that no longer exist
+        if response.cache_idx >= self.cache.wallpapers.len() {
+            return;
+        }
 
         if let Some(picker) = &mut self.thumbnails.image_picker {
             // Evict oldest entries if cache is full
