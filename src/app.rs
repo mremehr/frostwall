@@ -1,4 +1,4 @@
-use crate::pairing::{MatchContext, PairingHistory};
+use crate::pairing::{extract_style_tags, MatchContext, PairingHistory, PairingStyleMode};
 use crate::screen::{self, Screen};
 use crate::swww::{self, FillColor, ResizeMode, Transition, TransitionType};
 use crate::thumbnail::ThumbnailCache;
@@ -548,6 +548,8 @@ pub struct App {
     pub pairing_preview_matches: HashMap<String, Vec<(PathBuf, f32, ColorHarmony)>>,
     /// Selected index in pairing preview (which alternative)
     pub pairing_preview_idx: usize,
+    /// Style matching mode used in pairing preview.
+    pub pairing_style_mode: PairingStyleMode,
 }
 
 impl App {
@@ -604,6 +606,7 @@ impl App {
             show_pairing_preview: false,
             pairing_preview_matches: HashMap::new(),
             pairing_preview_idx: 0,
+            pairing_style_mode: PairingStyleMode::default(),
         })
     }
 
@@ -1243,6 +1246,7 @@ impl App {
                 ),
                 None => return,
             };
+        let selected_style_tags = extract_style_tags(&selected_tags);
 
         // Get suggestions from pairing history
         let match_mode = self.config.display.match_mode;
@@ -1275,6 +1279,8 @@ impl App {
                 tag_weight: self.config.pairing.tag_weight,
                 semantic_weight: self.config.pairing.semantic_weight,
                 repetition_penalty_weight: self.config.pairing.repetition_penalty_weight,
+                style_mode: PairingStyleMode::Off,
+                selected_style_tags: &selected_style_tags,
             };
             if let Some(suggested_path) = self
                 .pairing_history
@@ -1301,6 +1307,15 @@ impl App {
         self.pairing_preview_idx = 0;
     }
 
+    /// Cycle style matching behavior used in pairing preview.
+    pub fn toggle_pairing_style_mode(&mut self) {
+        self.pairing_style_mode = self.pairing_style_mode.next();
+        if self.show_pairing_preview {
+            self.update_pairing_preview_matches();
+            self.pairing_preview_idx = 0;
+        }
+    }
+
     /// Update pairing preview matches for all other screens
     fn update_pairing_preview_matches(&mut self) {
         self.pairing_preview_matches.clear();
@@ -1320,6 +1335,7 @@ impl App {
                 ),
                 None => return,
             };
+        let selected_style_tags = extract_style_tags(&selected_tags);
 
         // Default weights if empty
         let selected_weights = if selected_weights.is_empty() {
@@ -1364,10 +1380,12 @@ impl App {
                 tag_weight: self.config.pairing.tag_weight,
                 semantic_weight: self.config.pairing.semantic_weight,
                 repetition_penalty_weight: self.config.pairing.repetition_penalty_weight,
+                style_mode: self.pairing_style_mode,
+                selected_style_tags: &selected_style_tags,
             };
-            let top_matches =
-                self.pairing_history
-                    .get_top_matches(&match_context, &matching, preview_limit);
+            let top_matches = self
+                .pairing_history
+                .get_top_matches(&match_context, &matching, preview_limit);
 
             // Calculate harmony for each match
             let matches_with_harmony: Vec<(PathBuf, f32, ColorHarmony)> = top_matches
@@ -1681,6 +1699,9 @@ fn run_app<B: ratatui::backend::Backend>(
                                 if let Err(e) = app.apply_pairing_preview() {
                                     app.last_error = Some(format!("{}", e));
                                 }
+                            }
+                            KeyCode::Char('y') => {
+                                app.toggle_pairing_style_mode();
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let idx = if c == '0' {

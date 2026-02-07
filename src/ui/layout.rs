@@ -335,7 +335,12 @@ fn draw_pairing_panel(f: &mut Frame, app: &mut App, area: Rect, theme: &FrostThe
     let preview_idx = app.pairing_preview_idx;
 
     // Panel border
-    let title = format!(" Pair {}/{} ", preview_idx + 1, alternatives);
+    let title = format!(
+        " Pair {}/{} · Style {} ",
+        preview_idx + 1,
+        alternatives,
+        app.pairing_style_mode.display_name()
+    );
     let block = Block::default()
         .title(title)
         .title_style(
@@ -713,6 +718,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, theme: &FrostTheme) {
             sep.clone(),
             Span::styled("Enter", Style::default().fg(theme.success)),
             Span::styled(" apply", Style::default().fg(theme.fg_muted)),
+            sep.clone(),
+            Span::styled("y", Style::default().fg(theme.success)),
+            Span::styled(" style", Style::default().fg(theme.fg_muted)),
             sep.clone(),
             Span::styled("p/Esc", Style::default().fg(theme.success)),
             Span::styled(" close", Style::default().fg(theme.fg_muted)),

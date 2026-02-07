@@ -64,6 +64,33 @@ pub struct PairingHistory {
     max_records: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PairingStyleMode {
+    Off,
+    #[default]
+    Soft,
+    Strict,
+}
+
+impl PairingStyleMode {
+    pub fn next(self) -> Self {
+        match self {
+            PairingStyleMode::Off => PairingStyleMode::Soft,
+            PairingStyleMode::Soft => PairingStyleMode::Strict,
+            PairingStyleMode::Strict => PairingStyleMode::Off,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PairingStyleMode::Off => "Off",
+            PairingStyleMode::Soft => "Soft",
+            PairingStyleMode::Strict => "Strict",
+        }
+    }
+}
+
 pub struct MatchContext<'a> {
     pub selected_wp: &'a Path,
     pub target_screen: &'a str,
@@ -77,6 +104,92 @@ pub struct MatchContext<'a> {
     pub tag_weight: f32,
     pub semantic_weight: f32,
     pub repetition_penalty_weight: f32,
+    pub style_mode: PairingStyleMode,
+    pub selected_style_tags: &'a [String],
+}
+
+const STYLE_TAGS: &[&str] = &[
+    "abstract",
+    "anime",
+    "anime_character",
+    "concept_art",
+    "digital_art",
+    "fantasy",
+    "fantasy_landscape",
+    "geometric",
+    "illustration",
+    "line_art",
+    "moody_fantasy",
+    "painting",
+    "painterly",
+    "pixel_art",
+    "retro",
+    "vintage",
+];
+
+fn canonical_style_tag(tag: &str) -> Option<&'static str> {
+    let normalized = tag
+        .trim()
+        .to_lowercase()
+        .replace(['-', ' '], "_")
+        .trim_matches('_')
+        .to_string();
+    match normalized.as_str() {
+        "8bit" | "8_bit" | "pixelart" | "pixel_art" => Some("pixel_art"),
+        "anime_character" | "animecharacter" => Some("anime_character"),
+        "concept_art" | "conceptart" => Some("concept_art"),
+        "digital_painting" | "digital_art" | "digitalpainting" | "digitalart" => {
+            Some("digital_art")
+        }
+        "line_art" | "lineart" => Some("line_art"),
+        "fantasy_landscape" | "fantasylandscape" => Some("fantasy_landscape"),
+        "moody_fantasy" | "moodyfantasy" => Some("moody_fantasy"),
+        "painted" | "painting" | "painterly" => Some("painting"),
+        "illustrated" | "illustration" => Some("illustration"),
+        other => STYLE_TAGS.iter().copied().find(|style| *style == other),
+    }
+}
+
+pub fn extract_style_tags(tags: &[String]) -> Vec<String> {
+    let mut styles: Vec<String> = tags
+        .iter()
+        .filter_map(|tag| canonical_style_tag(tag))
+        .map(str::to_string)
+        .collect();
+    styles.sort();
+    styles.dedup();
+    styles
+}
+
+fn collect_style_tags<'a>(tags: impl Iterator<Item = &'a str>) -> HashSet<&'static str> {
+    tags.filter_map(canonical_style_tag).collect()
+}
+
+fn is_specific_style_tag(tag: &str) -> bool {
+    !matches!(tag, "abstract" | "anime" | "fantasy")
+}
+
+fn is_content_tag(tag: &str) -> bool {
+    if canonical_style_tag(tag).is_some() {
+        return false;
+    }
+    !matches!(
+        tag,
+        "bright"
+            | "dark"
+            | "pastel"
+            | "vibrant"
+            | "minimal"
+            | "landscape_orientation"
+            | "portrait"
+    )
+}
+
+fn compare_scored_match(a: &(PathBuf, f32), b: &(PathBuf, f32)) -> std::cmp::Ordering {
+    match b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal) {
+        std::cmp::Ordering::Equal => a.0.cmp(&b.0),
+        order => order,
+    }
 }
 
 impl PairingHistory {
@@ -260,6 +373,14 @@ impl PairingHistory {
         available_wallpapers: &[&crate::wallpaper::Wallpaper],
         limit: usize,
     ) -> Vec<(PathBuf, f32)> {
+        if limit == 0 || available_wallpapers.is_empty() {
+            return Vec::new();
+        }
+
+        const STRICT_VISUAL_MIN: f32 = 0.62;
+        const STRICT_SEMANTIC_MIN: f32 = 0.58;
+        const STRICT_COMBINED_QUALITY_MIN: f32 = 0.63;
+
         let selected_weights: Cow<'_, [f32]> = if context.selected_weights.is_empty() {
             Cow::Owned(vec![
                 1.0 / context.selected_colors.len().max(1) as f32;
@@ -270,10 +391,57 @@ impl PairingHistory {
         };
         let selected_tags: HashSet<&str> =
             context.selected_tags.iter().map(String::as_str).collect();
+        let selected_style_tags: HashSet<&str> = context
+            .selected_style_tags
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let selected_specific_style_tags: HashSet<&str> = selected_style_tags
+            .iter()
+            .copied()
+            .filter(|tag| is_specific_style_tag(tag))
+            .collect();
+        let selected_content_tags: HashSet<&str> = selected_tags
+            .iter()
+            .copied()
+            .filter(|tag| is_content_tag(tag))
+            .collect();
 
-        if available_wallpapers.is_empty() {
-            return Vec::new();
-        }
+        // Strict mode should prioritize "what the image depicts" and visual coherence
+        // over historical co-occurrence.
+        let (
+            screen_context_weight,
+            visual_weight,
+            harmony_weight,
+            tag_weight,
+            semantic_weight,
+            repetition_penalty_weight,
+        ) = match context.style_mode {
+            PairingStyleMode::Strict => (
+                context.screen_context_weight * 0.55,
+                context.visual_weight * 1.20,
+                context.harmony_weight * 1.10,
+                context.tag_weight * 1.55,
+                context.semantic_weight * 1.80,
+                context.repetition_penalty_weight * 1.15,
+            ),
+            PairingStyleMode::Soft => (
+                context.screen_context_weight * 0.90,
+                context.visual_weight * 1.05,
+                context.harmony_weight,
+                context.tag_weight * 1.15,
+                context.semantic_weight * 1.20,
+                context.repetition_penalty_weight,
+            ),
+            PairingStyleMode::Off => (
+                context.screen_context_weight,
+                context.visual_weight,
+                context.harmony_weight,
+                context.tag_weight,
+                context.semantic_weight,
+                context.repetition_penalty_weight,
+            ),
+        };
 
         // Build one lookup table instead of scanning affinity_scores for each candidate.
         let affinity_lookup: HashMap<&Path, f32> = self
@@ -296,7 +464,7 @@ impl PairingHistory {
         let mut scored: Vec<(PathBuf, f32)> = available_wallpapers
             .iter()
             .filter(|wp| wp.path != context.selected_wp)
-            .map(|wp| {
+            .filter_map(|wp| {
                 // Base score from pairing history
                 let mut score = affinity_lookup
                     .get(wp.path.as_path())
@@ -307,7 +475,96 @@ impl PairingHistory {
                     .get(wp.path.as_path())
                     .copied()
                     .unwrap_or(0.0)
-                    * context.screen_context_weight;
+                    * screen_context_weight;
+
+                // Tag matching bonus (0-6 points, 2 points per shared tag, max 3)
+                let mut unique_tags = HashSet::new();
+                let candidate_tags: Vec<&str> = wp
+                    .tags
+                    .iter()
+                    .map(String::as_str)
+                    .chain(wp.auto_tags.iter().map(|tag| tag.name.as_str()))
+                    .filter(|tag| unique_tags.insert(*tag))
+                    .collect();
+                let shared_tags = candidate_tags
+                    .iter()
+                    .filter(|tag| selected_tags.contains(**tag))
+                    .count();
+                let content_overlap = if selected_content_tags.is_empty() {
+                    0
+                } else {
+                    candidate_tags
+                        .iter()
+                        .filter(|tag| selected_content_tags.contains(**tag))
+                        .count()
+                };
+
+                let (style_overlap, specific_style_overlap) =
+                    if context.style_mode == PairingStyleMode::Off || selected_style_tags.is_empty()
+                    {
+                        (0, 0)
+                    } else {
+                        let candidate_style_tags = collect_style_tags(candidate_tags.iter().copied());
+                        let style_overlap = candidate_style_tags
+                            .iter()
+                            .filter(|tag| selected_style_tags.contains(**tag))
+                            .count();
+                        let specific_style_overlap = candidate_style_tags
+                            .iter()
+                            .filter(|tag| selected_specific_style_tags.contains(**tag))
+                            .count();
+                        (style_overlap, specific_style_overlap)
+                    };
+
+                // Semantic similarity from CLIP embeddings (0-1 normalized)
+                let semantic_similarity = if let (Some(selected_embedding), Some(candidate_embedding)) =
+                    (context.selected_embedding, wp.embedding.as_deref())
+                {
+                    Some(normalize_cosine_similarity(selected_embedding, candidate_embedding))
+                } else {
+                    None
+                };
+
+                // Strict mode can reject weak candidates early before running color/harmony scoring.
+                if context.style_mode == PairingStyleMode::Strict {
+                    if !selected_style_tags.is_empty() {
+                        let overlap = if selected_specific_style_tags.is_empty() {
+                            style_overlap
+                        } else {
+                            specific_style_overlap
+                        };
+                        let basis = if selected_specific_style_tags.is_empty() {
+                            selected_style_tags.len()
+                        } else {
+                            selected_specific_style_tags.len()
+                        };
+
+                        if overlap == 0 {
+                            return None;
+                        }
+                        if basis >= 2 && (overlap as f32 / basis as f32) < 0.5 {
+                            return None;
+                        }
+                    }
+
+                    if !selected_content_tags.is_empty() {
+                        if content_overlap == 0 {
+                            return None;
+                        }
+                        if selected_content_tags.len() >= 3
+                            && (content_overlap as f32 / selected_content_tags.len() as f32)
+                                < 0.34
+                        {
+                            return None;
+                        }
+                    }
+
+                    if let Some(similarity) = semantic_similarity {
+                        if similarity < STRICT_SEMANTIC_MIN {
+                            return None;
+                        }
+                    }
+                }
 
                 // Get candidate weights (or default to equal)
                 let wp_weights: Cow<'_, [f32]> = if wp.color_weights.is_empty() {
@@ -323,7 +580,7 @@ impl PairingHistory {
                     &wp.colors,
                     wp_weights.as_ref(),
                 );
-                score += visual_similarity * context.visual_weight;
+                score += visual_similarity * visual_weight;
 
                 // Color harmony bonus (0-3 points)
                 let (harmony, strength) = crate::utils::detect_harmony(
@@ -332,46 +589,82 @@ impl PairingHistory {
                     &wp.colors,
                     wp_weights.as_ref(),
                 );
-                let harmony_bonus = harmony.bonus() * strength * context.harmony_weight;
+                let harmony_bonus = harmony.bonus() * strength * harmony_weight;
                 score += harmony_bonus;
-
-                // Tag matching bonus (0-6 points, 2 points per shared tag, max 3)
-                let mut unique_tags = HashSet::new();
-                let shared_tags = wp
-                    .tags
-                    .iter()
-                    .map(String::as_str)
-                    .chain(wp.auto_tags.iter().map(|tag| tag.name.as_str()))
-                    .filter(|tag| unique_tags.insert(*tag))
-                    .filter(|tag| selected_tags.contains(tag))
-                    .count();
-                let tag_bonus = (shared_tags as f32).min(3.0) * context.tag_weight;
+                let tag_bonus = (shared_tags as f32).min(3.0) * tag_weight;
                 score += tag_bonus;
 
-                // Semantic similarity from CLIP embeddings (0-7 points)
-                if let (Some(selected_embedding), Some(candidate_embedding)) =
-                    (context.selected_embedding, wp.embedding.as_deref())
-                {
-                    let semantic_similarity =
-                        normalize_cosine_similarity(selected_embedding, candidate_embedding);
-                    score += semantic_similarity * context.semantic_weight;
+                match context.style_mode {
+                    PairingStyleMode::Off => {}
+                    PairingStyleMode::Soft => {
+                        if !selected_style_tags.is_empty() {
+                            if style_overlap > 0 {
+                                score += (style_overlap as f32).min(2.0) * (tag_weight * 1.25);
+                            } else {
+                                score -= tag_weight * 0.75;
+                            }
+                        }
+                        if !selected_content_tags.is_empty() {
+                            if content_overlap > 0 {
+                                score += (content_overlap as f32).min(3.0) * (tag_weight * 0.90);
+                            } else {
+                                score -= tag_weight * 0.55;
+                            }
+                        }
+                    }
+                    PairingStyleMode::Strict => {
+                        if !selected_style_tags.is_empty() {
+                            let overlap = if selected_specific_style_tags.is_empty() {
+                                style_overlap
+                            } else {
+                                specific_style_overlap
+                            };
+
+                            score += (overlap as f32).min(2.0) * (tag_weight * 1.5);
+                        }
+
+                        if !selected_content_tags.is_empty() {
+                            score += (content_overlap as f32).min(3.0) * (tag_weight * 1.25);
+                        } else {
+                            // No explicit style tags on the selected image:
+                            // strict mode still enforces close visual/semantic similarity.
+                            if visual_similarity < STRICT_VISUAL_MIN {
+                                return None;
+                            }
+                        }
+
+                        let strict_quality = if let Some(similarity) = semantic_similarity {
+                            (similarity * 0.58) + (visual_similarity * 0.42)
+                        } else {
+                            visual_similarity
+                        };
+                        if strict_quality < STRICT_COMBINED_QUALITY_MIN {
+                            return None;
+                        }
+                    }
+                }
+
+                if let Some(similarity) = semantic_similarity {
+                    score += similarity * semantic_weight;
                 }
 
                 score -= self.recent_repetition_penalty(
                     context.target_screen,
                     &wp.path,
-                    context.repetition_penalty_weight,
+                    repetition_penalty_weight,
                 );
 
-                (wp.path.clone(), score)
+                Some((wp.path.clone(), score))
             })
             .collect();
 
-        // Sort by score descending
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        // Return top N
-        scored.truncate(limit);
+        // Keep top-N efficiently and return deterministic ordering.
+        if scored.len() > limit {
+            let pivot = limit - 1;
+            scored.select_nth_unstable_by(pivot, compare_scored_match);
+            scored.truncate(limit);
+        }
+        scored.sort_unstable_by(compare_scored_match);
         scored
     }
 

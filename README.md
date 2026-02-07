@@ -61,6 +61,8 @@ Multi-monitor wallpaper pairing that learns from your choices:
 - **LAB color matching** - Suggests wallpapers with perceptually similar colors
 - **Score-based ranking** - Combines history, visual similarity, harmony, tags, and semantic CLIP similarity
 - **Configurable weights** - Tune scoring weights in `[pairing]` without recompiling
+- **Style toggle in pairing mode** - `y` cycles `Off` / `Soft` / `Strict` style matching
+- **Strict is truly strict** - In `Strict`, non-matching style candidates are filtered out (no automatic fallback to `Soft`)
 - **Position memory** - TUI remembers your browsing position per screen
 
 ### Auto-Tagging
@@ -399,7 +401,13 @@ preferred_tags = ["dark", "space", "minimal"]
 | `←` / `→` | Cycle through alternatives (up to `preview_match_limit`) |
 | `1`-`9`, `0` | Jump to alternative index (`0` = 10th) |
 | `Enter` | Apply all wallpapers (selected + suggestions) |
+| `y` | Toggle style match mode (`Off` → `Soft` → `Strict`) |
 | `p` / `Esc` | Close pairing preview |
+
+Style mode behavior:
+- `Off`: No style filter, pure score ranking.
+- `Soft`: Prefers style overlap but still allows non-overlap candidates.
+- `Strict`: Requires stronger style/content overlap, boosts semantic similarity (`what the image depicts`), and downweights history bias.
 
 ## Architecture
 
@@ -521,6 +529,8 @@ Each wallpaper stores metadata including colors, tags, and optional CLIP embeddi
 - **Visual pairing preview** - 50/50 split-view with larger, dynamic thumbnails for multi-monitor pairing
 - **Manual pairing control** - Press `p` to preview and select matching wallpapers
 - **Improved pairing** - More options for pairing, better color and semantic matching
+- **Strict style filtering** - Pairing `Strict` mode now enforces style overlap without silently falling back to `Soft`
+- **Strict semantic priority** - In `Strict`, semantic/content similarity is weighted higher than pairing history
 - **Configurable pairing scoring** - Tune history/visual/harmony/tag/semantic/repetition weights in config
 
 ### v0.4.0
