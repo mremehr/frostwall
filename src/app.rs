@@ -511,6 +511,7 @@ pub enum AppEvent {
 const MAX_THUMBNAIL_CACHE: usize = 20;
 
 /// UI-related transient state (popups, command mode, errors).
+#[derive(Default)]
 pub struct UiState {
     pub should_quit: bool,
     pub show_help: bool,
@@ -522,20 +523,7 @@ pub struct UiState {
     pub pywal_export: bool,
 }
 
-impl Default for UiState {
-    fn default() -> Self {
-        Self {
-            should_quit: false,
-            show_help: false,
-            show_colors: false,
-            show_color_picker: false,
-            command_mode: false,
-            command_buffer: String::new(),
-            last_error: None,
-            pywal_export: false,
-        }
-    }
-}
+
 
 /// Filter and sort state.
 pub struct FilterState {
@@ -559,6 +547,7 @@ impl Default for FilterState {
 }
 
 /// Selection navigation state.
+#[derive(Default)]
 pub struct SelectionState {
     pub screen_idx: usize,
     pub wallpaper_idx: usize,
@@ -566,16 +555,7 @@ pub struct SelectionState {
     pub screen_positions: HashMap<usize, usize>,
 }
 
-impl Default for SelectionState {
-    fn default() -> Self {
-        Self {
-            screen_idx: 0,
-            wallpaper_idx: 0,
-            filtered_wallpapers: Vec::new(),
-            screen_positions: HashMap::new(),
-        }
-    }
-}
+
 
 /// Multi-screen wallpaper pairing state.
 pub struct PairingState {

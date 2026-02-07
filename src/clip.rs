@@ -3,8 +3,8 @@
 //! Uses ONNX Runtime with CLIP ViT-B/32 visual encoder to automatically tag images
 //! with semantic categories like "nature", "city", "space", etc.
 //!
-//! The text embeddings are pre-computed and stored in clip_embeddings.rs to avoid
-//! needing to download and run the text encoder at runtime.
+//! The text embeddings are pre-computed and stored as a compact binary file
+//! (data/embeddings.bin) loaded at compile time via clip_embeddings_bin.rs.
 
 #[cfg(feature = "clip")]
 use anyhow::{Context, Result};
