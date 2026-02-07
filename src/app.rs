@@ -609,9 +609,10 @@ impl App {
             })
             .or_else(|| Some(Picker::new((8, 16))));
 
-        // Load pairing history
-        let pairing_history = PairingHistory::load(config.pairing.max_history_records)
+        // Load pairing history and rebuild affinity scores with corrected formula
+        let mut pairing_history = PairingHistory::load(config.pairing.max_history_records)
             .unwrap_or_else(|_| PairingHistory::new(config.pairing.max_history_records));
+        pairing_history.rebuild_affinity();
 
         Ok(Self {
             screens: Vec::new(),
@@ -1241,6 +1242,17 @@ impl App {
                         self.selection.wallpaper_idx = n - 1;
                     }
                 }
+            }
+
+            // Rebuild pairing affinity scores from history
+            "pair-reset" | "pair-rebuild" => {
+                let records = self.pairing.history.record_count();
+                self.pairing.history.rebuild_affinity();
+                self.ui.last_error = Some(format!(
+                    "Rebuilt affinity from {} records ({} pairs)",
+                    records,
+                    self.pairing.history.affinity_count()
+                ));
             }
 
             _ => {

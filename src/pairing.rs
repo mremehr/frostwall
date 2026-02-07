@@ -111,22 +111,35 @@ pub struct MatchContext<'a> {
 }
 
 const STYLE_TAGS: &[&str] = &[
+    "3d_render",
     "abstract",
     "anime",
     "anime_character",
+    "art_nouveau",
+    "chibi",
     "concept_art",
+    "cyberpunk",
     "digital_art",
     "fantasy",
     "fantasy_landscape",
     "geometric",
+    "gothic",
     "illustration",
     "line_art",
+    "mecha",
     "moody_fantasy",
+    "oil_painting",
     "painting",
     "painterly",
+    "photography",
     "pixel_art",
     "retro",
+    "sci_fi",
+    "shoujo",
+    "steampunk",
+    "vaporwave",
     "vintage",
+    "watercolor",
 ];
 
 pub(crate) fn canonical_style_tag(tag: &str) -> Option<&'static str> {
@@ -148,6 +161,16 @@ pub(crate) fn canonical_style_tag(tag: &str) -> Option<&'static str> {
         "moody_fantasy" | "moodyfantasy" => Some("moody_fantasy"),
         "painted" | "painting" | "painterly" => Some("painting"),
         "illustrated" | "illustration" => Some("illustration"),
+        "3d" | "3d_render" | "3d_art" | "cgi" => Some("3d_render"),
+        "oil_painting" | "oilpainting" | "oil" => Some("oil_painting"),
+        "watercolor" | "watercolour" | "aquarelle" => Some("watercolor"),
+        "art_nouveau" | "artnouveau" => Some("art_nouveau"),
+        "vaporwave" | "vapor_wave" => Some("vaporwave"),
+        "steampunk" | "steam_punk" => Some("steampunk"),
+        "shoujo" | "shojo" => Some("shoujo"),
+        "mech" | "mecha" | "robot" => Some("mecha"),
+        "sci_fi" | "scifi" | "science_fiction" => Some("sci_fi"),
+        "photo" | "photograph" | "photography" => Some("photography"),
         other => STYLE_TAGS.iter().copied().find(|style| *style == other),
     }
 }
@@ -239,7 +262,7 @@ impl PairingHistory {
 
     /// Record a new pairing
     pub fn record_pairing(&mut self, wallpapers: HashMap<String, PathBuf>, manual: bool) {
-        // End previous pairing (for duration tracking)
+        // End previous pairing (for duration tracking — also updates affinity)
         self.end_current_pairing();
 
         let timestamp = SystemTime::now()
@@ -248,7 +271,7 @@ impl PairingHistory {
             .unwrap_or(0);
 
         let record = PairingRecord {
-            wallpapers: wallpapers.clone(),
+            wallpapers,
             timestamp,
             duration: None,
             manual,
@@ -257,13 +280,9 @@ impl PairingHistory {
         self.data.records.push(record);
         self.current_pairing_start = Some(timestamp);
 
-        // Update affinity scores for all pairs in this pairing
-        let paths: Vec<_> = wallpapers.values().cloned().collect();
-        for i in 0..paths.len() {
-            for j in (i + 1)..paths.len() {
-                self.update_affinity(&paths[i], &paths[j], None);
-            }
-        }
+        // NOTE: affinity is updated in end_current_pairing() when the *next*
+        // pairing starts (or on shutdown), so we have duration data.  Updating
+        // here too would double-count pair_count.
 
         // Prune old records if needed
         self.prune_old_records();
@@ -328,15 +347,17 @@ impl PairingHistory {
         }
     }
 
-    /// Calculate base affinity score from pairing stats
+    /// Calculate base affinity score from pairing stats.
+    /// Normalized to roughly 0.0–1.0 so it doesn't dominate other features.
     fn calculate_base_score(pair_count: u32, avg_duration_secs: f32) -> f32 {
-        // More pairings = higher score (with diminishing returns)
-        let count_score = (pair_count as f32).ln().max(0.0) * 10.0;
+        // Diminishing returns on count, normalized to ~1.0 at 10 pairings
+        let count_score = (pair_count as f32).ln_1p() / 10.0_f32.ln_1p();
 
-        // Longer durations = higher score (capped)
-        let duration_score = (avg_duration_secs / 300.0).min(5.0);
+        // Longer durations boost slightly (capped at 1.0)
+        let duration_score = (avg_duration_secs / 1800.0).min(1.0);
 
-        count_score + duration_score
+        // Combine: count matters most, duration is a bonus
+        (count_score * 0.7 + duration_score * 0.3).min(1.0)
     }
 
     /// Get ordered pair of paths (for consistent key)
@@ -464,21 +485,30 @@ impl PairingHistory {
         let screen_context_lookup =
             self.screen_context_scores(context.selected_wp, context.target_screen);
 
+        // In Strict mode, reduce the influence of history so that style/type matching
+        // actually dominates.  In Off/Soft the user's history still matters a lot.
+        let history_scale = match context.style_mode {
+            PairingStyleMode::Strict => 0.15,
+            PairingStyleMode::Soft => 0.6,
+            PairingStyleMode::Off => 1.0,
+        };
+
         let mut scored: Vec<(PathBuf, f32)> = available_wallpapers
             .iter()
             .filter(|wp| wp.path != context.selected_wp)
             .filter_map(|wp| {
-                // Base score from pairing history
-                let mut score = affinity_lookup
+                // Base score from pairing history (already normalized 0-1)
+                let affinity = affinity_lookup
                     .get(wp.path.as_path())
                     .copied()
                     .unwrap_or(0.0);
-                // Screen-aware co-occurrence for this specific target output.
-                score += screen_context_lookup
+                let screen_ctx = screen_context_lookup
                     .get(wp.path.as_path())
                     .copied()
-                    .unwrap_or(0.0)
-                    * screen_context_weight;
+                    .unwrap_or(0.0);
+                let mut score =
+                    (affinity * screen_context_weight + screen_ctx * screen_context_weight)
+                        * history_scale;
 
                 // Tag matching bonus (0-6 points, 2 points per shared tag, max 3)
                 let mut unique_tags = HashSet::new();
@@ -602,20 +632,22 @@ impl PairingHistory {
                     PairingStyleMode::Soft => {
                         if !selected_style_tags.is_empty() {
                             if style_overlap > 0 {
-                                score += (style_overlap as f32).min(2.0) * (tag_weight * 1.25);
+                                score += (style_overlap as f32).min(2.0) * (tag_weight * 1.5);
                             } else {
-                                score -= tag_weight * 0.75;
+                                score -= tag_weight * 1.2;
                             }
                         }
                         if !selected_content_tags.is_empty() {
                             if content_overlap > 0 {
-                                score += (content_overlap as f32).min(3.0) * (tag_weight * 0.90);
+                                score += (content_overlap as f32).min(3.0) * tag_weight;
                             } else {
-                                score -= tag_weight * 0.55;
+                                score -= tag_weight * 0.6;
                             }
                         }
                     }
                     PairingStyleMode::Strict => {
+                        // Strict mode: style/type is the PRIMARY signal.
+                        // Big reward for matching style, big penalty for mismatch.
                         if !selected_style_tags.is_empty() {
                             let overlap = if selected_specific_style_tags.is_empty() {
                                 style_overlap
@@ -623,12 +655,18 @@ impl PairingHistory {
                                 specific_style_overlap
                             };
 
-                            score += (overlap as f32).min(2.0) * (tag_weight * 1.5);
+                            if overlap > 0 {
+                                // Strong bonus — this is the whole point of strict
+                                score += (overlap as f32).min(2.0) * (tag_weight * 4.0);
+                            } else {
+                                // Heavy penalty for wrong style
+                                score -= tag_weight * 6.0;
+                            }
                         }
 
                         if !selected_content_tags.is_empty() {
-                            score += (content_overlap as f32).min(3.0) * (tag_weight * 1.25);
-                        } else {
+                            score += (content_overlap as f32).min(3.0) * (tag_weight * 2.0);
+                        } else if selected_style_tags.is_empty() {
                             // No explicit style tags on the selected image:
                             // strict mode still enforces close visual/semantic similarity.
                             if visual_similarity < STRICT_VISUAL_MIN {
@@ -724,7 +762,7 @@ impl PairingHistory {
             return 0.0;
         }
 
-        const LOOKBACK_RECORDS: usize = 12;
+        const LOOKBACK_RECORDS: usize = 20;
 
         let raw_penalty = self
             .data
@@ -742,7 +780,8 @@ impl PairingHistory {
             })
             .sum::<f32>();
 
-        (raw_penalty * 0.35 * weight).min(1.5 * weight)
+        // Scale penalty relative to total feature magnitude so it actually matters.
+        (raw_penalty * 2.5 * weight).min(8.0 * weight)
     }
 
     /// Get affinity score between two wallpapers
@@ -757,12 +796,27 @@ impl PairingHistory {
             .unwrap_or(0.0)
     }
 
-    /// Prune old records to stay under max limit
+    /// Prune old records and stale affinity entries.
     fn prune_old_records(&mut self) {
         if self.data.records.len() > self.max_records {
             let to_remove = self.data.records.len() - self.max_records;
             self.data.records.drain(0..to_remove);
         }
+
+        // Collect all wallpaper paths still referenced in remaining records
+        let active_paths: HashSet<&Path> = self
+            .data
+            .records
+            .iter()
+            .flat_map(|r| r.wallpapers.values())
+            .map(PathBuf::as_path)
+            .collect();
+
+        // Remove affinity entries where either wallpaper is no longer in history
+        self.data.affinity_scores.retain(|score| {
+            active_paths.contains(score.wallpaper_a.as_path())
+                && active_paths.contains(score.wallpaper_b.as_path())
+        });
     }
 
     /// Begin undo window
@@ -839,6 +893,32 @@ impl PairingHistory {
             .rev()
             .find(|r| r.wallpapers.len() > 1)
             .map(|r| r.wallpapers.clone())
+    }
+
+    /// Rebuild affinity scores from scratch based on current records.
+    /// Use this after fixing bugs in the scoring logic to reset stale data.
+    pub fn rebuild_affinity(&mut self) {
+        self.data.affinity_scores.clear();
+
+        // Collect all pairs from records first to avoid borrow conflict
+        let pairs: Vec<(Vec<PathBuf>, Option<u64>)> = self
+            .data
+            .records
+            .iter()
+            .map(|record| {
+                let paths: Vec<PathBuf> = record.wallpapers.values().cloned().collect();
+                (paths, record.duration)
+            })
+            .collect();
+
+        for (paths, duration) in &pairs {
+            for i in 0..paths.len() {
+                for j in (i + 1)..paths.len() {
+                    self.update_affinity(&paths[i], &paths[j], *duration);
+                }
+            }
+        }
+        let _ = self.save();
     }
 
     /// Get number of affinity pairs

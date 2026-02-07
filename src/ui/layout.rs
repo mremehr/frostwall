@@ -1067,6 +1067,20 @@ fn draw_help_popup(f: &mut Frame, area: Rect, theme: &FrostTheme) {
                 Style::default().fg(theme.fg_secondary),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("  :rescan ", Style::default().fg(theme.accent_primary)),
+            Span::styled(
+                " Rescan wallpaper dir",
+                Style::default().fg(theme.fg_secondary),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  :pair-reset", Style::default().fg(theme.accent_primary)),
+            Span::styled(
+                " Rebuild pairing data",
+                Style::default().fg(theme.fg_secondary),
+            ),
+        ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Options",

@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_embeddings_load() {
         let embeddings = category_embeddings();
-        assert_eq!(embeddings.len(), 26, "Should have 26 base categories");
+        assert_eq!(embeddings.len(), 57, "Should have 57 base categories");
     }
 
     #[test]
